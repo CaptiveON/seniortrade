@@ -1,0 +1,18 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "trading-ai-assistant"
+version = "0.1.0"
+description = "Binance crypto trading analysis + risk-management CLI (screener-first, edge-proven, discipline-enforced). Not financial advice."
+requires-python = ">=3.11"
+
+[tool.setuptools]
+packages = ["src"]
+
+[tool.pytest.ini_options]
+# Run pytest from the repo root; make `import src.*` resolve without install.
+pythonpath = ["."]
+testpaths = ["tests"]
+addopts = "-q"

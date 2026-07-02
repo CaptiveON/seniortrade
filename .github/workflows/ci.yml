@@ -1,0 +1,24 @@
+# CI — every push/PR must keep the full suite green (audit finding 5 remediation).
+# The suite is fully OFFLINE (fakes/synthetic data; no API keys, no exchange calls),
+# so CI needs no secrets and cannot leak any.
+name: tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install proven dependency versions
+        run: pip install -r requirements.lock
+      - name: Run the full test suite
+        run: python -m pytest

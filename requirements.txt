@@ -1,0 +1,20 @@
+# Crypto Trading SYSTEM — runtime dependencies
+# Python 3.11+ (developed and CI-tested on 3.12)
+#
+# Ranges are bounded ABOVE as well as below (audit finding 5: a future major must not
+# silently change behavior). requirements.lock pins the exact versions the test suite
+# is proven against — use it for reproducible installs / CI.
+ccxt>=4.4,<5            # exchange connectivity (public market data needs no API key)
+pandas>=2.2,<3.1        # dataframes / time series (proven on 2.2.x and 3.0.x)
+numpy>=2.0,<3           # numerics
+python-dotenv>=1.0,<2   # load .env (API keys kept out of git)
+rich>=13.7,<14          # terminal tables / panels
+
+# pandas-ta is in the target stack for later layers (analysis/backtest), but its
+# packaging is unstable across numpy/pandas majors. Step 1's screener computes
+# ATR/ADX natively in src/indicators.py so the build stays reproducible.
+# Uncomment once you pin a working build for your environment:
+# pandas-ta>=0.3
+
+# --- dev / test ---
+pytest>=8.0,<10
