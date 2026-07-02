@@ -817,7 +817,7 @@ def _pf(value: float) -> str:
 
 
 def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
-                     n_candles: int | None = None) -> None:
+                     n_candles: int | None = None, quality: dict | None = None) -> None:
     bt = settings.backtest
     # HONEST candle count: the ACTUAL closed candles used, not the requested limit. If they differ
     # (young symbol, or the ±1 forming candle), show both so the number is never misleading.
@@ -827,9 +827,15 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
         candles_txt = f"{n_candles} candles"
     else:
         candles_txt = f"{n_candles} candles (of {bt.candle_limit} requested)"
+    head = Text(f"{symbol} ({market.label})  TF {tf} · {candles_txt} · "
+                f"min sample {bt.min_sample} · {bt.folds} folds", style="bold")
+    q = quality or {}
+    issues = {k: q.get(k, 0) for k in ("dropped", "gaps", "zero_volume", "suspect_spikes") if q.get(k, 0)}
+    if issues:                                    # audit finding 6: never hide a dirty tape
+        head.append("\ndata quality: " + " · ".join(f"{k.replace('_', ' ')} {v}" for k, v in issues.items())
+                    + ("  (broken rows DROPPED; anomalies flagged, never 'fixed')"), style="yellow")
     console.print(Panel(
-        Text(f"{symbol} ({market.label})  TF {tf} · {candles_txt} · "
-             f"min sample {bt.min_sample} · {bt.folds} folds", style="bold"),
+        head,
         title="Backtest — proving edge on real history (same code as live)",
         border_style="blue", title_align="left"))
 
@@ -1330,12 +1336,12 @@ def cmd_backtest(args: argparse.Namespace) -> int:
     try:
         with _progress() as progress:
             progress.add_task(f"Backtesting {args.symbol} {tf}…", total=None)
-            profiles, n_candles = run_backtest(market, args.symbol, settings, tf, setup_name=args.setup)
+            profiles, n_candles, quality = run_backtest(market, args.symbol, settings, tf, setup_name=args.setup)
     except DataError as exc:
         console.print(_data_error_panel(exc))
         return 1
     _render_backtest(args.symbol, market, tf, profiles, settings, full=getattr(args, "full", False),
-                     n_candles=n_candles)
+                     n_candles=n_candles, quality=quality)
     return 0
 
 

@@ -118,7 +118,7 @@ def ensure_profiles(market: Market, symbol: str, settings, tf: str, refresh: boo
         cached = load_cached(market, symbol, tf, settings.edge.cache_ttl_hours)
         if cached is not None:
             return cached
-    profiles, _n = bt.run_backtest(market, symbol, settings, tf)
+    profiles, _n, _q = bt.run_backtest(market, symbol, settings, tf)
     save_cache(market, symbol, tf, profiles, settings.backtest.candle_limit)
     return {name: _compact(p) for name, p in profiles.items()}
 

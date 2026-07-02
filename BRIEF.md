@@ -897,7 +897,16 @@ monitor.py  ( `manage` )
 ## ARCHITECTURE
 /src
   config.py              — thresholds, market enum, env/.env overrides (all gates visible)
-  data_fetch.py          — real Binance data (2+ TFs), order book, funding/OI, integrity guards
+  data_fetch.py          — real Binance data (2+ TFs), order book, funding/OI, integrity guards.
+                           CANDLE SANITATION (audit finding 6) at the fetch choke point: DROPS only
+                           provably-broken rows (NaN/≤0 price, high<low, wick-inconsistent, bad
+                           volume); FLAGS — never "fixes" — gaps, zero-volume bars and bad-print-
+                           shaped spikes (range >12× median, fully reverted next bar) in
+                           df.attrs['quality']; a fully-broken tape raises DataError. Filling gaps
+                           or clipping spikes would FABRICATE data and corrupt the edge measurement
+                           (a real crash must stay data). backtest surfaces the report in its header;
+                           auto-PAGINATES past the ~1000/req exchange cap so any candle_limit is
+                           honoured (live: AGLD carries 1 flagged suspect print; majors clean).
   indicators.py          — ATR/ATR%, ADX, RSI/MACD, OBV/CVD, squeeze (+ vol-regime)
   market_context.py      — tide (BTC/ETH anchors, dominance) + influence groups (driver, RS/beta to leader)
   screener.py            — Layer 0: ranked shortlist; incl. extension/freshness flag + group column

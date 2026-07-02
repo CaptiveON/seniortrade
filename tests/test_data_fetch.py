@@ -56,3 +56,71 @@ def test_exact_cap_is_single_call():
     ex = _FakeEx(total=2500)
     df = fetch_ohlcv(ex, "X/USDT:USDT", "4h", _MAX_CANDLES_PER_CALL)
     assert len(df) == _MAX_CANDLES_PER_CALL and ex.calls == 1
+
+
+# --- candle sanitation (audit finding 6) ------------------------------------- #
+import numpy as np
+import pandas as pd
+
+from src.data_fetch import DataError, sanitize_ohlcv
+
+
+def _frame(rows, freq="4h"):
+    idx = pd.date_range("2024-01-01", periods=len(rows), freq=freq, tz="UTC")
+    df = pd.DataFrame(rows, columns=["open", "high", "low", "close", "volume"], index=idx)
+    df.insert(0, "timestamp", (idx.view("int64") // 10**6))
+    return df
+
+
+def test_sanitize_drops_only_provably_broken_rows():
+    rows = [
+        [100, 101, 99, 100, 10],     # clean
+        [100, 99, 101, 100, 10],     # high < low  -> broken
+        [100, 101, 99, float("nan"), 10],   # NaN close -> broken
+        [100, 101, 99, -5, 10],      # non-positive price -> broken
+        [100, 100.5, 99, 102, 10],   # close above high (wick-inconsistent) -> broken
+        [100, 101, 99, 100, -3],     # negative volume -> broken
+        [100, 101, 99, 100.5, 10],   # clean
+    ]
+    out = sanitize_ohlcv(_frame(rows), "4h")
+    q = out.attrs["quality"]
+    assert len(out) == 2 and q["dropped"] == 5
+    assert q["raw_rows"] == 7 and q["rows"] == 2
+
+
+def test_sanitize_flags_gaps_and_zero_volume_without_dropping():
+    rows = [[100, 101, 99, 100, 10], [100, 101, 99, 100, 0],
+            [100, 101, 99, 100, 0], [100, 101, 99, 100, 10]]
+    df = _frame(rows)
+    df = df.drop(df.index[2])                      # create a 1-bar gap
+    out = sanitize_ohlcv(df, "4h")
+    q = out.attrs["quality"]
+    assert len(out) == 3                           # nothing dropped
+    assert q["gaps"] == 1 and q["zero_volume"] == 1
+
+
+def test_sanitize_flags_suspect_spike_but_keeps_it():
+    rows = [[100, 100.6, 99.4, 100, 10] for _ in range(30)]
+    rows[15] = [100, 160, 40, 100.2, 10]           # 120-point range vs ~1.2 median, reverts next bar
+    out = sanitize_ohlcv(_frame(rows), "4h")
+    q = out.attrs["quality"]
+    assert len(out) == 30                          # flagged, NOT dropped (a real crash must stay data)
+    assert q["suspect_spikes"] == 1
+
+
+def test_sanitize_clean_tape_untouched():
+    rng = np.random.default_rng(3)
+    close = 100 + rng.normal(0, 1, 200).cumsum()
+    rows = [[c, c + abs(rng.normal(0, .4)) + .01, c - abs(rng.normal(0, .4)) - .01, c, 5.0] for c in close]
+    out = sanitize_ohlcv(_frame(rows), "4h")
+    q = out.attrs["quality"]
+    assert len(out) == 200 and q["dropped"] == 0 and q["gaps"] == 0
+
+
+def test_fetch_ohlcv_raises_on_fully_broken_tape():
+    class _BrokenEx(_FakeEx):
+        def fetch_ohlcv(self, symbol, timeframe=None, since=None, limit=None, params=None):
+            self.calls += 1
+            return [[1_700_000_000_000 + i * 14_400_000, 100, 99, 101, 100, 10] for i in range(50)]  # high<low
+    with pytest.raises(DataError, match="sanitation"):
+        fetch_ohlcv(_BrokenEx(total=1), "X/USDT:USDT", "4h", 50)

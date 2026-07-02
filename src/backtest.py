@@ -391,14 +391,15 @@ def fetch_history(market: Market, symbols, settings, tf: str) -> dict:
 
 
 def run_backtest(market: Market, symbol: str, settings, tf: str,
-                 setup_name: str | None = None) -> tuple[dict[str, ex.EdgeProfile], int]:
+                 setup_name: str | None = None) -> tuple[dict[str, ex.EdgeProfile], int, dict]:
     """Fetch real history and evaluate every setup (or one) into EdgeProfiles. Returns
-    (profiles, n_candles) — the ACTUAL closed candles used (post drop-unclosed), for honest
-    reporting (may be < requested for a young symbol, > 1000 via pagination)."""
+    (profiles, n_candles, data_quality) — the ACTUAL closed candles used (post drop-unclosed)
+    and the sanitation report (audit finding 6), for honest reporting."""
     bcfg = settings.backtest
     exch = dfetch.make_exchange(market, settings.api_key, settings.api_secret)
     dfetch.load_markets(exch)
     raw = dfetch.fetch_ohlcv(exch, symbol, tf, bcfg.candle_limit)
+    quality = dict(raw.attrs.get("quality") or {})
     bars = dfetch.drop_unclosed(exch, raw, tf)
 
     res = run_setups(bars, market, settings, tf)
@@ -409,4 +410,4 @@ def run_backtest(market: Market, symbol: str, settings, tf: str,
         profiles[name] = ex.evaluate(res.trades.get(name, []), setup=name,
                                      n_combos_tested=n_combos, cfg=bcfg,
                                      null_trades=res.nulls.get(name, []))
-    return profiles, len(bars)
+    return profiles, len(bars), quality

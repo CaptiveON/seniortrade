@@ -63,6 +63,8 @@ confirmation.**
        profitable from CONSISTENTLY profitable; report-only, shown in backtest/analyze. (P6)
     └─ CORRELATION HONESTY: cross-coin correlation is MEASURED (design effect) — SEs widened,
        gates use effective independent n, not raw pooled n. (audit finding 2)
+    └─ CANDLE SANITATION: broken rows dropped at the fetch choke point; gaps/zero-volume/
+       suspect prints flagged, never "fixed" — bad tapes can't contaminate the pool. (finding 6)
 12. guards + adherence (pre-trade gate: heat, lockout, cooldown, event)  ✅ done
 13. intraday runtime (speed tiers, thread-pool fetch, `watch`, bt opt)   ✅ done  ← `watch`, `--tier`
 14. journal + review (trade log, portfolio_state→guards, verdicts)       ✅ done  ← `review`

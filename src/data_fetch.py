@@ -74,6 +74,60 @@ def fetch_all_tickers(ex: ccxt.Exchange) -> dict:
 # a single call cannot exceed this, so larger `limit`s are PAGINATED (see _fetch_ohlcv_paginated).
 _MAX_CANDLES_PER_CALL = 1000
 
+# ---------------------------------------------------------------------------- #
+# CANDLE SANITATION (audit finding 6). One bad tape silently contaminates every
+# pooled statistic downstream, so raw exchange candles are screened here at the
+# single choke point. Policy: DROP only PROVABLY broken rows; FLAG (never "fix")
+# anomalies — filling gaps or clipping spikes would fabricate market data and
+# corrupt the edge measurement.
+# ---------------------------------------------------------------------------- #
+_SPIKE_RANGE_MULT = 12.0    # bar range > this × median range, fully reverted next bar → suspect print
+
+
+def _tf_seconds(tf: str) -> float:
+    try:
+        val = float(tf[:-1])
+    except (ValueError, IndexError):
+        return 0.0
+    return val * {"m": 60.0, "h": 3600.0, "d": 86400.0, "w": 604800.0}.get(tf[-1].lower(), 0.0)
+
+
+def sanitize_ohlcv(df: pd.DataFrame, timeframe: str) -> pd.DataFrame:
+    """Screen raw exchange candles; returns the screened frame with a quality report in
+    ``df.attrs['quality']``.
+
+    DROPPED (provably broken — impossible market states): NaN/non-positive prices,
+    high < low, high below the body, low above the body, NaN/negative volume.
+    FLAGGED ONLY (real-world anomalies the engine must SEE, not invent around):
+    gaps (missing bars vs the timeframe grid), zero-volume bars, suspect single-bar
+    spikes (range > 12× median that fully reverts on the next bar — bad-print shaped)."""
+    n0 = len(df)
+    body_hi = df[["open", "close"]].max(axis=1)
+    body_lo = df[["open", "close"]].min(axis=1)
+    prices = df[["open", "high", "low", "close"]]
+    broken = (prices.isna().any(axis=1) | (prices <= 0).any(axis=1)
+              | (df["high"] < df["low"]) | (df["high"] < body_hi) | (df["low"] > body_lo)
+              | df["volume"].isna() | (df["volume"] < 0))
+    if bool(broken.any()):
+        df = df.loc[~broken].copy()
+    gaps = 0
+    step = _tf_seconds(timeframe)
+    if len(df) > 1 and step > 0:
+        deltas = df.index.to_series().diff().dropna().dt.total_seconds()
+        gaps = int(((deltas / step).round() - 1).clip(lower=0).sum())
+    zero_vol = int((df["volume"] == 0).sum()) if len(df) else 0
+    spikes = 0
+    if len(df) > 2:
+        rng = df["high"] - df["low"]
+        med = float(rng.median())
+        if med > 0:
+            big = rng > _SPIKE_RANGE_MULT * med
+            reverted = (df["close"].shift(-1) - df["close"].shift(1)).abs() <= 2 * med
+            spikes = int((big & reverted).fillna(False).sum())
+    df.attrs["quality"] = {"dropped": int(broken.sum()), "gaps": gaps, "zero_volume": zero_vol,
+                           "suspect_spikes": spikes, "rows": len(df), "raw_rows": n0}
+    return df
+
 
 def _fetch_ohlcv_paginated(ex: ccxt.Exchange, symbol: str, timeframe: str, limit: int) -> list:
     """Collect up to `limit` of the MOST-RECENT candles by walking BACKWARD in cap-sized batches
@@ -128,6 +182,9 @@ def fetch_ohlcv(
     df["datetime"] = pd.to_datetime(df["timestamp"], unit="ms", utc=True)
     df = df.set_index("datetime")
     df[_NUMERIC] = df[_NUMERIC].astype(float)
+    df = sanitize_ohlcv(df, timeframe)           # audit finding 6: screen at the choke point
+    if df.empty:
+        raise DataError(f"All candles for {symbol} {timeframe} failed sanitation (broken tape)")
     return df
 
 
