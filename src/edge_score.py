@@ -837,6 +837,47 @@ def diff_boards(prev_symbols, opportunities) -> tuple[list[str], list[str]]:
     return new, dropped
 
 
+# --------------------------------------------------------------------------- #
+# PHASE 2 — the BETA (market-posture) lane. The alpha board only shows setups whose
+# TIMING beats matched-geometry random entries. In a clean BTC trend the dominant
+# opportunity is often the TREND ITSELF (beta) — real money the alpha gate rightly
+# refuses to call "edge". These helpers surface it, clearly labelled, WITHOUT
+# touching a single alpha gate. Near-misses make "empty board" transparent.
+# --------------------------------------------------------------------------- #
+def beta_candidate(profile: dict, setup: str, side: str, regime: str, symbol: str,
+                   context: dict | None, posture: str, cfg: EdgeScoreConfig) -> dict | None:
+    """A live WITH-TIDE signal whose setup×regime historically MAKES money (exp > 0 on an
+    adequate EFFECTIVE sample) but FAILED the alpha gate — it rides the trend; its timing adds
+    no proven edge beyond that. Returns a display dict with the exact alpha shortfall, else None.
+    (A cell that PASSES the alpha gate returns None — that belongs on the alpha board.)"""
+    if posture not in (mc.RISK_ON, mc.RISK_OFF) or not _tide_aligned(side, posture):
+        return None                                   # no tide, or fighting it → not a beta ride
+    reg = _context_cell_reg(profile, regime, context, cfg.sig_z) or _shrunk_reg(profile, symbol, regime)
+    if not reg or _n_eff(reg) < cfg.min_regime_n or float(reg["expectancy"]) <= 0:
+        return None                                   # thin or money-losing → nothing to ride
+    ok, _edge, reason = null_adjusted_edge(reg, (profile.get("null_by_regime") or {}).get(regime), cfg)
+    if ok:
+        return None                                   # proven timing alpha → alpha board's job
+    return {"symbol": symbol, "side": side, "setup": setup, "regime": regime,
+            "exp": float(reg["expectancy"]), "n_eff": _n_eff(reg), "alpha_gap": reason}
+
+
+def near_misses(profiles: dict, cfg: EdgeScoreConfig, top: int = 3) -> list:
+    """The failed alpha cells CLOSEST to proving (exp>0, adequate n_eff, gate failed) with the
+    exact reason — so an empty alpha board is transparent, never opaque."""
+    out = []
+    for name, prof in (profiles or {}).items():
+        for regime, reg in (prof.get("by_regime") or {}).items():
+            if float(reg.get("expectancy", 0.0)) <= 0 or _n_eff(reg) < cfg.min_regime_n:
+                continue
+            ok, edge, reason = null_adjusted_edge(reg, (prof.get("null_by_regime") or {}).get(regime), cfg)
+            if ok:
+                continue
+            out.append({"setup": name, "regime": regime, "exp": float(reg["expectancy"]),
+                        "n_eff": _n_eff(reg), "edge_after_null": float(edge), "reason": reason})
+    return sorted(out, key=lambda d: -d["edge_after_null"])[:top]
+
+
 def _tide_aligned(side: str, posture: str) -> bool:
     if posture == mc.NEUTRAL:
         return True
@@ -902,6 +943,7 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
 
     opportunities: list[Opportunity] = []
     watchlist: list[str] = []
+    beta_cands: list[dict] = []
     for c in survivors:
         ar = analyses.get(c.symbol)
         if ar is None or not ar.setups or ar.structure is None or ar.structure.state is None:
@@ -909,19 +951,28 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
             continue
         regime = ar.structure.state.trend
         best = None
+        coin_beta = None
         for sig in ar.setups:
             prof = profiles.get(sig.setup)
             if not prof:
                 continue
+            ctx = resolve_context(ar.context, sig.direction)
             scored = score_opportunity(
                 setup=sig.setup, side=sig.direction, provisional_grade=sig.grade,
                 freshness=ar.freshness, tide_aligned=_tide_aligned(sig.direction, ar.posture),
                 regime=regime, profile=prof, cfg=cfg, symbol=c.symbol,
-                context=resolve_context(ar.context, sig.direction))
+                context=ctx)
             if scored and (best is None or scored["edge_score_r"] > best["edge_score_r"]):
                 best = scored
+            elif scored is None:                       # failed alpha → maybe a with-tide beta ride
+                bc = beta_candidate(prof, sig.setup, sig.direction, regime, c.symbol,
+                                    ctx, ar.posture, cfg)
+                if bc and (coin_beta is None or bc["exp"] > coin_beta["exp"]):
+                    coin_beta = bc
         if best is None:
             watchlist.append(c.symbol)
+            if coin_beta:
+                beta_cands.append(coin_beta)
             continue
         opportunities.append(Opportunity(
             symbol=c.symbol, group=c.group, side=best["side"], setup=best["setup"],
@@ -932,4 +983,18 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
             p_positive=best.get("p_positive", 0.0)))
 
     opportunities.sort(key=lambda o: o.edge_score_r, reverse=True)
-    return result.context, opportunities, watchlist
+    # PHASE 2 — the BETA lane payload: top structure-timed with-tide candidates + the null's
+    # own measurement of the tide + the alpha near-misses (transparent empty board).
+    posture = result.context.posture if result.context else mc.NEUTRAL
+    beta = None
+    if posture in (mc.RISK_ON, mc.RISK_OFF):
+        tide_regime = "up" if posture == mc.RISK_ON else "down"
+        nulls = [(nm, float(p["null_by_regime"][tide_regime]["expectancy"]))
+                 for nm, p in profiles.items()
+                 if (p.get("null_by_regime") or {}).get(tide_regime, {}).get("n", 0) >= cfg.min_regime_n]
+        beta = {"posture": posture, "tide_regime": tide_regime,
+                "candidates": sorted(beta_cands, key=lambda d: -d["exp"])[:3],
+                "null_lo": min((x for _, x in nulls), default=0.0),
+                "null_hi": max((x for _, x in nulls), default=0.0),
+                "near_misses": near_misses(profiles, cfg)}
+    return result.context, opportunities, watchlist, beta

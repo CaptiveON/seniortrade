@@ -936,46 +936,87 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
 _EDGE_GRADE_STYLE = {"A": "bold green", "B": "green", "C": "yellow", "D": "dim", "F": "dim red"}
 
 
-def _render_board(market, context, opps, watch, settings) -> None:
+def _render_board(market, context, opps, watch, settings, beta=None) -> None:
     console.print(_render_context_banner(context))
+    # ── LANE 1: ALPHA — proven TIMING edge (beats matched-geometry random entries) ──
     if not opps:
-        body = Text("NO PROVEN EDGE on the board right now → stand aside.\n", style="bold yellow")
-        body.append("A valid, frequent result — the tool will not manufacture an opportunity.\n",
+        body = Text("NO PROVEN ALPHA right now → no setup's timing beats random entries here.\n",
+                    style="bold yellow")
+        body.append("A valid, frequent result — the tool will not manufacture timing edge.",
                     style="dim")
+        if beta and (beta.get("candidates") or abs(beta.get("null_hi", 0)) > 0):
+            body.append("\nThe TIDE may still be tradable — see the BETA lane below.", style="cyan")
         if watch:
-            body.append(f"Watchlist (live setup, but no proven regime-matched edge): "
+            body.append(f"\nWatchlist (live setup, no proven regime-matched edge): "
                         f"{', '.join(watch[:12])}", style="dim")
-        console.print(Panel(body, title="Opportunity Board", border_style="yellow", title_align="left"))
-        console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))
-        return
-
-    table = Table(title="Opportunity Board — ranked by conservative Edge Score",
-                  header_style="bold", expand=True)
-    for col, just in (("#", "right"), ("Symbol", "left"), ("Group", "left"), ("Side", "left"),
-                      ("Setup", "left"), ("Edge", "right"), ("Grade", "center"),
-                      ("Confidence", "left"), ("Fresh", "left"), ("Regime", "left")):
-        table.add_column(col, justify=just, no_wrap=True)
-    for rank, o in enumerate(opps, start=1):
-        setup_cell = o.setup if not o.context_label else f"{o.setup} ·{o.context_label}"
-        table.add_row(
-            str(rank), o.symbol, o.group, Text(o.side, style=_SIDE_STYLE.get(o.side, "")), setup_cell,
-            f"{o.edge_score_r:+.2f}R", Text(o.grade, style=_EDGE_GRADE_STYLE.get(o.grade, "")),
-            f"{o.confidence_tier} ({o.confidence:.0%}, n{o.regime_n})", o.fresh, o.regime)
-    console.print(table)
-    console.print(Text("Confidence = P(edge genuinely beats random entries) × fold-consistency — "
-                       "'how certain we are the edge exists,' not how many signals agree.", style="dim"))
-    if any(o.context_label for o in opps):
-        console.print(Text("·label = scored on a PROVEN context refinement (single feature, or an 'A & B' "
-                           "feature INTERACTION that beats either alone); shrunk toward the base setup×regime.",
-                           style="dim"))
-    console.print(Text("#1 is the MOST likely fluke (board-level multiple testing) — confidence is "
-                       "shown for a reason; verify with `analyze` and don't chase blindly.", style="dim"))
-    console.print(Text("Pooled coins are cross-correlated: gates/confidence use the measured EFFECTIVE "
-                       "sample size (design effect), not raw pooled n. Universe = today's most-liquid "
-                       "survivors (selection bias) — read as 'edge on currently-liquid names.'", style="dim"))
-    if watch:
-        console.print(Text(f"Watchlist (no proven edge yet): {', '.join(watch[:12])}", style="dim"))
+        console.print(Panel(body, title="ALPHA — proven timing edge (beats random entries)",
+                            border_style="yellow", title_align="left"))
+    else:
+        table = Table(title="ALPHA — proven timing edge, ranked by conservative Edge Score",
+                      header_style="bold", expand=True)
+        for col, just in (("#", "right"), ("Symbol", "left"), ("Group", "left"), ("Side", "left"),
+                          ("Setup", "left"), ("Edge", "right"), ("Grade", "center"),
+                          ("Confidence", "left"), ("Fresh", "left"), ("Regime", "left")):
+            table.add_column(col, justify=just, no_wrap=True)
+        for rank, o in enumerate(opps, start=1):
+            setup_cell = o.setup if not o.context_label else f"{o.setup} ·{o.context_label}"
+            table.add_row(
+                str(rank), o.symbol, o.group, Text(o.side, style=_SIDE_STYLE.get(o.side, "")), setup_cell,
+                f"{o.edge_score_r:+.2f}R", Text(o.grade, style=_EDGE_GRADE_STYLE.get(o.grade, "")),
+                f"{o.confidence_tier} ({o.confidence:.0%}, n{o.regime_n})", o.fresh, o.regime)
+        console.print(table)
+        console.print(Text("Confidence = P(edge genuinely beats random entries) × fold-consistency — "
+                           "'how certain we are the edge exists,' not how many signals agree.", style="dim"))
+        if any(o.context_label for o in opps):
+            console.print(Text("·label = scored on a PROVEN context refinement (single feature, or an 'A & B' "
+                               "feature INTERACTION that beats either alone); shrunk toward the base setup×regime.",
+                               style="dim"))
+        console.print(Text("#1 is the MOST likely fluke (board-level multiple testing) — confidence is "
+                           "shown for a reason; verify with `analyze` and don't chase blindly.", style="dim"))
+        console.print(Text("Pooled coins are cross-correlated: gates/confidence use the measured EFFECTIVE "
+                           "sample size (design effect), not raw pooled n. Universe = today's most-liquid "
+                           "survivors (selection bias) — read as 'edge on currently-liquid names.'", style="dim"))
+        if watch:
+            console.print(Text(f"Watchlist (no proven edge yet): {', '.join(watch[:12])}", style="dim"))
+    _render_beta_lane(beta)
     console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))
+
+
+def _render_beta_lane(beta: dict | None) -> None:
+    """LANE 2: BETA — the MARKET POSTURE trade (riding the BTC tide). Deliberately separate from
+    ALPHA: these candidates make money WITH the trend, not beyond it. Alpha gates untouched."""
+    if not beta:
+        return                                        # BTC not trending → no tide to ride
+    tide = beta["tide_regime"]
+    side_word = "shorts" if tide == "down" else "longs"
+    body = Text()
+    body.append(f"BTC posture {beta['posture'].upper()} — the tide itself is the trade candidate.\n",
+                style="bold")
+    body.append(f"Evidence: matched-geometry random entries across the pool earn "
+                f"{beta['null_lo']:+.2f}…{beta['null_hi']:+.2f}R in the {tide} regime "
+                f"(positive = drift is paying {side_word} regardless of timing).\n", style="dim")
+    cands = beta.get("candidates") or []
+    if cands:
+        body.append("Best structure-timed rides (live signals, historically +EV in this regime, "
+                    "NO proven timing alpha):\n", style="cyan")
+        for i, c in enumerate(cands, start=1):
+            body.append(f"  {i}. {c['symbol']}  {c['setup']} {c['side']}  ·  regime exp "
+                        f"{c['exp']:+.2f}R (n_eff {c['n_eff']:.0f})\n")
+            body.append(f"     why not alpha: {c['alpha_gap']}\n", style="dim")
+    else:
+        body.append("No structure-timed with-tide money-makers among live signals right now.\n",
+                    style="dim")
+    nm = beta.get("near_misses") or []
+    if nm:
+        body.append("Closest to proving ALPHA (cache-wide near-misses):\n", style="dim")
+        for m in nm:
+            body.append(f"  · {m['setup']}/{m['regime']}  exp {m['exp']:+.2f}R (n_eff {m['n_eff']:.0f}) — "
+                        f"{m['reason']}\n", style="dim")
+    body.append("BETA ≠ ALPHA: profits (if any) come WITH the trend, not beyond it — `analyze SYMBOL` "
+                "for entry/stop; `stage` will label it 'unproven — discretionary'; `roar` will NOT "
+                "strike these. Size conservatively; the tide can turn without notice.", style="yellow")
+    console.print(Panel(body, title="BETA — market posture (rides the BTC tide; NOT proven timing edge)",
+                        border_style="cyan", title_align="left"))
 
 
 def cmd_scan(args: argparse.Namespace) -> int:
@@ -988,13 +1029,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
             def cb(symbol, i, total):
                 progress.update(task, description=f"Edge-scoring {symbol} ({i}/{total})")
 
-            context, opps, watch = run_scan(market, settings, top=args.top,
+            context, opps, watch, beta = run_scan(market, settings, top=args.top,
                                             refresh=args.refresh, progress=cb,
                                             hard=getattr(args, "hard", False))
     except DataError as exc:
         console.print(_data_error_panel(exc))
         return 1
-    _render_board(market, context, opps, watch, settings)
+    _render_board(market, context, opps, watch, settings, beta=beta)
     return 0
 
 
@@ -1243,7 +1284,7 @@ def _watch_loop(args, settings, market: Market, spawned: bool = False) -> int:
                         def _cb(sym, i, total):
                             progress.update(task, description=f"Edge-scoring {sym} ({i}/{total})")
 
-                        context, opps, watch = run_scan(market, settings, top=args.top, progress=_cb)
+                        context, opps, watch, beta = run_scan(market, settings, top=args.top, progress=_cb)
                 except DataError as exc:
                     console.print(_data_error_panel(exc))
                     next_board = time.time() + price_poll       # retry shortly on a fetch error
@@ -1272,7 +1313,7 @@ def _watch_loop(args, settings, market: Market, spawned: bool = False) -> int:
                     _notify("watch — status",
                             f"{len({o.symbol for o in opps} | set(watch))} coins · {len(watch)} live setups · "
                             f"{len(opps)} PROVEN", wcfg.notify)
-                    _render_board(market, context, opps, watch, settings)
+                    _render_board(market, context, opps, watch, settings, beta=beta)
                     last_digest = now
 
                 last_board = {"mon": len({o.symbol for o in opps} | set(watch)),
@@ -2151,7 +2192,7 @@ def cmd_roar(args: argparse.Namespace) -> int:
     try:
         with _progress() as p:
             p.add_task("Scanning for proven edge…", total=None)
-            ctx, opportunities, watchlist = run_scan(market, settings, refresh=getattr(args, "refresh", False))
+            ctx, opportunities, watchlist, _beta = run_scan(market, settings, refresh=getattr(args, "refresh", False))
     except DataError as exc:
         console.print(_data_error_panel(exc))
         return 1

@@ -522,3 +522,53 @@ def test_edge_gate_uses_effective_n_not_raw_pooled_n():
     # same numbers with full independence stay proven (backward compat: n_eff absent → raw n)
     v2 = {"regime": {"n": 40, "expectancy": 0.35, "ci_low": 0.12}, "overall": None}
     assert edge_gate(v2, CFG)[0] == EDGE_PROVEN
+
+
+# --- PHASE 2: the BETA (market-posture) lane + near-miss transparency ---------- #
+def _beta_prof(exp, ci_low, n=300, null_exp=0.0, null_ci=None, n_eff=None):
+    return {"by_regime": {"down": {"n": n, "n_eff": n_eff or n, "expectancy": exp, "ci_low": ci_low}},
+            "null_by_regime": {"down": {"n": n, "expectancy": null_exp,
+                                        "ci_low": null_ci if null_ci is not None else null_exp - 0.05}}}
+
+
+def test_beta_candidate_surfaces_with_tide_money_maker_that_fails_alpha():
+    from src.edge_score import beta_candidate
+    # +0.06R money-maker whose edge after the null misses the floor -> a beta ride
+    prof = _beta_prof(exp=0.06, ci_low=0.02, null_exp=0.0)
+    c = beta_candidate(prof, "trend_pullback", "short", "down", "ETH/USDT:USDT",
+                       None, RISK_OFF, CFG)
+    assert c is not None and c["exp"] == pytest.approx(0.06)
+    assert "floor" in c["alpha_gap"] or "random" in c["alpha_gap"]      # exact shortfall reason
+
+
+def test_beta_candidate_rejects_counter_tide_losers_and_proven():
+    from src.edge_score import beta_candidate
+    prof = _beta_prof(exp=0.06, ci_low=0.02)
+    # counter-tide (long into RISK_OFF) -> not a tide ride
+    assert beta_candidate(prof, "x", "long", "down", "S", None, RISK_OFF, CFG) is None
+    # no tide at all -> no beta lane
+    assert beta_candidate(prof, "x", "short", "down", "S", None, NEUTRAL, CFG) is None
+    # money-loser -> nothing to ride
+    loser = _beta_prof(exp=-0.10, ci_low=-0.20)
+    assert beta_candidate(loser, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
+    # PROVEN alpha (strongly beats null) -> belongs on the alpha board, not beta
+    proven = _beta_prof(exp=0.40, ci_low=0.30, null_exp=-0.05, null_ci=-0.10)
+    assert beta_candidate(proven, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
+    # thin effective sample -> not trustworthy enough even for beta
+    thin = _beta_prof(exp=0.06, ci_low=0.02, n=40, n_eff=8)
+    assert beta_candidate(thin, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
+
+
+def test_near_misses_ranked_closest_first_and_exclude_proven_and_losers():
+    from src.edge_score import near_misses
+    profiles = {
+        "close":  _beta_prof(exp=0.08, ci_low=0.05, null_exp=0.0),     # edge just under floor
+        "far":    _beta_prof(exp=0.03, ci_low=0.01, null_exp=0.0),     # weaker
+        "loser":  _beta_prof(exp=-0.2, ci_low=-0.3),                   # excluded
+        "proven": _beta_prof(exp=0.40, ci_low=0.30, null_exp=-0.05, null_ci=-0.10),  # excluded (alpha)
+    }
+    nm = near_misses(profiles, CFG, top=3)
+    names = [m["setup"] for m in nm]
+    assert "loser" not in names and "proven" not in names
+    assert names[0] == "close"                                         # closest to proving first
+    assert all("reason" in m and m["exp"] > 0 for m in nm)
