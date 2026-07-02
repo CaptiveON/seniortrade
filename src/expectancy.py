@@ -228,17 +228,35 @@ def decay_weights(entry_ts, half_life_days: float, ref_ts: float | None = None):
     return 0.5 ** (age_days / half_life_days)
 
 
-def monte_carlo(rs, runs: int, ruin_drawdown_r: float, seed: int = 0) -> MonteCarlo:
+def _block_resample(arr: np.ndarray, block: int, rng) -> np.ndarray:
+    """Circular block bootstrap: sample whole CONSECUTIVE blocks (wrapping) so local
+    autocorrelation — loss streaks, clustered volatility — survives into the resample.
+    An i.i.d. permutation scatters streaks and understates drawdown tails (audit finding 4)."""
+    n = len(arr)
+    if block <= 1 or block >= n:
+        return rng.permutation(arr)
+    k = -(-n // block)                                  # blocks needed to cover n
+    starts = rng.integers(0, n, size=k)
+    idx = (starts[:, None] + np.arange(block)[None, :]) % n
+    return arr[idx.reshape(-1)[:n]]
+
+
+def monte_carlo(rs, runs: int, ruin_drawdown_r: float, seed: int = 0, block: int = 0) -> MonteCarlo:
+    """Drawdown/ruin distribution under resampling. ``block`` = 0 → AUTO circular block
+    bootstrap (length ≈ √n, min 5) preserving autocorrelation (honest tails); 1 → legacy
+    i.i.d. permutation (total R fixed, streaks scattered); ≥2 → explicit block length."""
     arr = np.asarray(rs, dtype=float)
     n = len(arr)
     if n == 0:
         return MonteCarlo(0, 0.0, 0.0, 0.0, 0.0)
+    if block <= 0:
+        block = max(5, int(round(math.sqrt(n))))
     rng = np.random.default_rng(seed)
     totals = np.empty(runs)
     maxdds = np.empty(runs)
     streaks = np.empty(runs)
     for k in range(runs):
-        perm = rng.permutation(arr)
+        perm = _block_resample(arr, block, rng)
         eq = np.cumsum(perm)
         peak = np.maximum.accumulate(eq)
         maxdds[k] = float(np.max(peak - eq))
@@ -381,7 +399,8 @@ def evaluate(trades, *, setup: str, n_combos_tested: int, cfg, null_trades=None)
         by_regime[regime] = summarize([t.r for t in ts], cfg.z, wsub)
     folds = fold_expectancies(rs, cfg.folds)
     consistency = (sum(1 for f in folds if f > 0) / len(folds)) if folds else 0.0
-    mc = monte_carlo(rs, cfg.mc_runs, cfg.ruin_drawdown_r) if rs else None
+    mc = monte_carlo(rs, cfg.mc_runs, cfg.ruin_drawdown_r,
+                     block=getattr(cfg, "mc_block", 0)) if rs else None
 
     # AUDIT FINDING 2 — cross-coin correlation. Pooled trades are NOT independent (coins ride
     # the same market move); MEASURE the clustering per time bucket and widen every SE/CI by

@@ -333,3 +333,25 @@ def test_evaluate_widens_ci_and_deflates_n_under_clustering():
     assert on.overall.n_eff < on.overall.n / 5                  # far fewer independent obs
     assert on.overall.ci_low < off.overall.ci_low               # CI honestly wider
     assert off.overall.n_eff == pytest.approx(off.overall.n)    # disabled → independence
+
+
+# --- AUDIT FINDING 4: block-bootstrap Monte-Carlo (honest streak/drawdown tails) ---- #
+def test_block_mc_widens_drawdown_tails_under_persistent_clustering():
+    # a LOSING REGIME (40 consecutive losses) — the autocorrelation that kills accounts.
+    # iid permutation scatters it (p95 DD ~5R, ruin 0% — dangerously optimistic); the block
+    # bootstrap preserves and can concatenate loss blocks (p95 DD ~40R, ruin >50% — honest).
+    rs = [-1.0] * 40 + [0.7] * 160
+    iid = monte_carlo(rs, runs=800, ruin_drawdown_r=15.0, seed=3, block=1)
+    blk = monte_carlo(rs, runs=800, ruin_drawdown_r=15.0, seed=3)          # auto ≈ √200
+    assert blk.p95_max_drawdown_r > 2 * iid.p95_max_drawdown_r              # honest tails
+    assert blk.expected_loss_streak > iid.expected_loss_streak              # streaks survive
+    assert blk.risk_of_ruin > iid.risk_of_ruin                              # ruin no longer hidden
+
+
+def test_block_mc_legacy_iid_keeps_total_fixed_and_is_deterministic():
+    rs = list(np.random.default_rng(1).normal(0.05, 1.0, 150))
+    iid = monte_carlo(rs, runs=200, ruin_drawdown_r=15.0, seed=7, block=1)
+    assert iid.median_total_r == pytest.approx(sum(rs))                     # permutation: total invariant
+    a = monte_carlo(rs, runs=200, ruin_drawdown_r=15.0, seed=9)
+    b = monte_carlo(rs, runs=200, ruin_drawdown_r=15.0, seed=9)
+    assert a.p95_max_drawdown_r == b.p95_max_drawdown_r                     # seeded → reproducible

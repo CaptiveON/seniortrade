@@ -922,10 +922,12 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
 
     console.print(Panel(Text(
         f"Caveats: Binance shows SURVIVORS only (delistings absent → results flattered); "
+        f"universe = TODAY'S most-liquid names (point-in-time selection bias — read as "
+        f"'edge on currently-liquid survivors'); "
         f"{len(profiles)} setups judged (multiple-testing — a lone +EV can be luck); "
         f"pooled coins are CROSS-CORRELATED — SEs/gates use the measured effective sample "
-        f"(design effect), not raw pooled n; costs modeled "
-        f"(maker/taker + slippage{', funding' if market is Market.USDM else ''}). "
+        f"(design effect), not raw pooled n; Monte-Carlo uses block bootstrap (streaks survive); "
+        f"costs modeled (maker/taker + slippage{', funding' if market is Market.USDM else ''}). "
         "Historical edge with stated confidence — NOT a prediction.", style="dim"),
         border_style="dim"))
     console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))
@@ -969,7 +971,8 @@ def _render_board(market, context, opps, watch, settings) -> None:
     console.print(Text("#1 is the MOST likely fluke (board-level multiple testing) — confidence is "
                        "shown for a reason; verify with `analyze` and don't chase blindly.", style="dim"))
     console.print(Text("Pooled coins are cross-correlated: gates/confidence use the measured EFFECTIVE "
-                       "sample size (design effect), not raw pooled n.", style="dim"))
+                       "sample size (design effect), not raw pooled n. Universe = today's most-liquid "
+                       "survivors (selection bias) — read as 'edge on currently-liquid names.'", style="dim"))
     if watch:
         console.print(Text(f"Watchlist (no proven edge yet): {', '.join(watch[:12])}", style="dim"))
     console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))

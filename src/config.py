@@ -280,6 +280,8 @@ class BacktestConfig:
     min_sample: int = 30           # trades required before a verdict
     folds: int = 3                 # walk-forward consistency folds
     mc_runs: int = 5000            # Monte-Carlo reshuffles
+    mc_block: int = 0              # MC resampling: 0 = AUTO circular block (≈√n; honest streak/DD
+    #                                tails, audit finding 4) · 1 = legacy iid permutation · ≥2 = block len
     bootstrap_runs: int = 2000     # P9: bootstrap resamples for the robust expectancy CI
     ruin_drawdown_r: float = 15.0  # "ruin" = equity draws down this many R
     # TIME-WEIGHTED LEARNING (P7): recent trades weigh more; older fade gradually (never dropped).
