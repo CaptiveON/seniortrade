@@ -281,3 +281,55 @@ def test_evaluate_without_timestamps_keeps_input_order():
     trades = [SimpleNamespace(r=r, regime="up") for r in (+1.0, -1.0, +1.0, -1.0, +0.5, -0.5)]
     p = evaluate(trades, setup="x", n_combos_tested=1, cfg=BacktestConfig())
     assert p.overall.n == 6 and p.recent_expectancy == pytest.approx(0.0)       # last third = (+0.5, -0.5)
+
+
+# --- AUDIT FINDING 2: cross-coin correlation → measured design effect ---------- #
+from src.expectancy import design_effect  # noqa: E402
+
+_DAY = 86400.0
+
+
+def test_design_effect_independent_is_near_one():
+    rng = np.random.default_rng(7)
+    # 12 'coins' × 60 days, INDEPENDENT r's within each day-bucket → ρ≈0 → DEFF≈1
+    ts = [d * _DAY + c for d in range(60) for c in range(12)]
+    rs = list(rng.normal(0, 1, len(ts)))
+    deff, rho = design_effect(ts, rs, _DAY)
+    assert rho < 0.15 and deff < 1.0 + 0.15 * 11 + 0.2
+
+
+def test_design_effect_perfectly_clustered_deflates_to_bucket_count():
+    rng = np.random.default_rng(8)
+    # 12 coins share the SAME r each day (perfect within-day correlation) → DEFF ≈ m̄ = 12
+    ts, rs = [], []
+    for d in range(60):
+        day_r = float(rng.normal(0, 1))
+        for c in range(12):
+            ts.append(d * _DAY + c)
+            rs.append(day_r)
+    deff, rho = design_effect(ts, rs, _DAY)
+    assert rho > 0.95 and deff == pytest.approx(12.0, rel=0.05)
+
+
+def test_design_effect_degenerate_inputs_are_independent():
+    assert design_effect([0.0, 0.0, 0.0], [1, -1, 1], _DAY) == (1.0, 0.0)     # no timestamps
+    assert design_effect([1e6], [0.5], _DAY) == (1.0, 0.0)                     # single trade
+    assert design_effect([1e6, 1e6 + 10], [1, -1], 0) == (1.0, 0.0)            # bucket disabled
+    assert design_effect([d * _DAY for d in range(10)], list(range(10)), _DAY) == (1.0, 0.0)  # all singletons
+
+
+def test_evaluate_widens_ci_and_deflates_n_under_clustering():
+    rng = np.random.default_rng(9)
+    trades = []
+    for d in range(50):
+        day_r = float(rng.normal(0.2, 1.0))
+        for c in range(10):                                     # 10 coins echo the day's move
+            trades.append(SimpleNamespace(r=day_r + float(rng.normal(0, 0.05)), regime="up",
+                                          entry_ts=d * _DAY + c * 60, gross_r=day_r, funding_r=0.0))
+    on = evaluate(trades, setup="x", n_combos_tested=1, cfg=BacktestConfig())
+    off = evaluate(trades, setup="x", n_combos_tested=1,
+                   cfg=_replace(BacktestConfig(), deff_enabled=False))
+    assert on.deff > 5.0                                        # heavy clustering detected
+    assert on.overall.n_eff < on.overall.n / 5                  # far fewer independent obs
+    assert on.overall.ci_low < off.overall.ci_low               # CI honestly wider
+    assert off.overall.n_eff == pytest.approx(off.overall.n)    # disabled → independence

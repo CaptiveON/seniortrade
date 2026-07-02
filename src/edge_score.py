@@ -73,10 +73,13 @@ def _compact(profile) -> dict:
         "bootstrap_high": profile.bootstrap_high,
         "recent_expectancy": profile.recent_expectancy,
         "recent_n": profile.recent_n,
-        "overall": {"n": o.n, "expectancy": o.expectancy, "ci_low": o.ci_low,
+        # audit finding 2: measured cross-coin correlation (SEs in the CIs below are √DEFF-widened)
+        "deff": profile.deff,
+        "corr_rho": profile.corr_rho,
+        "overall": {"n": o.n, "n_eff": o.n_eff, "expectancy": o.expectancy, "ci_low": o.ci_low,
                     "win_rate": o.win_rate, "avg_win_r": o.avg_win_r, "avg_loss_r": o.avg_loss_r,
                     "std_r": o.std_r},
-        "by_regime": {r: {"n": s.n, "expectancy": s.expectancy, "ci_low": s.ci_low,
+        "by_regime": {r: {"n": s.n, "n_eff": s.n_eff, "expectancy": s.expectancy, "ci_low": s.ci_low,
                           "win_rate": s.win_rate, "avg_win_r": s.avg_win_r, "avg_loss_r": s.avg_loss_r,
                           "std_r": s.std_r}
                       for r, s in profile.by_regime.items()},
@@ -309,7 +312,7 @@ def _shrunk_reg(profile: dict, symbol: str | None, regime: str) -> dict | None:
     tau2 = float((profile.get("tau2_by_regime") or {}).get(regime, 0.0))
     post_mean, post_se, w = ex.shrink(int(own["n"]), float(own["mean"]), float(own.get("sd", 0.0)),
                                       prior_mean, prior_se, tau2)
-    return {"n": pool["n"], "expectancy": post_mean, "ci_low": post_mean - post_se,
+    return {"n": pool["n"], "n_eff": pool.get("n_eff"), "expectancy": post_mean, "ci_low": post_mean - post_se,
             "win_rate": pool.get("win_rate"), "avg_win_r": pool.get("avg_win_r"),
             "avg_loss_r": pool.get("avg_loss_r"), "std_r": pool.get("std_r"),
             "own_n": int(own["n"]), "own_mean": float(own["mean"]), "weight": w, "prior": prior_mean}
@@ -352,7 +355,7 @@ def _context_cell_reg(profile: dict, regime: str, context: dict | None, sig_z: f
                                       prior_mean, prior_se, float(best.get("tau2", 0.0)))
     label = best.get("label") or (best["value"] if best["feature"] == "arch"
                                   else f"{best['feature']}={best['value']}")
-    return {"n": pool["n"], "expectancy": post_mean, "ci_low": post_mean - post_se,
+    return {"n": pool["n"], "n_eff": pool.get("n_eff"), "expectancy": post_mean, "ci_low": post_mean - post_se,
             "win_rate": pool.get("win_rate"), "avg_win_r": pool.get("avg_win_r"),
             "avg_loss_r": pool.get("avg_loss_r"), "std_r": pool.get("std_r"),
             "context_label": label, "context_lift": float(best["lift"])}
@@ -412,7 +415,8 @@ def sizing_inputs(market: Market, tf: str, setup: str, regime: str,
         return None
     ok, edge, _ = null_adjusted_edge(reg, v.get("null"), cfg)
     n = int(reg.get("n", 0) or 0)
-    sample_quality = n / (n + cfg.shrink_k) if n else 0.0          # → 1 as the sample grows
+    ne = _n_eff(reg)                                               # audit finding 2: independent evidence
+    sample_quality = ne / (ne + cfg.shrink_k) if ne else 0.0       # → 1 as the EFFECTIVE sample grows
     sc = statistical_confidence(reg, v.get("null"), float(v.get("fold_consistency", 0.0)), cfg)
     avg_loss = reg.get("avg_loss_r")
     return {
@@ -466,15 +470,22 @@ def null_adjusted_edge(reg: dict, null: dict | None, cfg: EdgeScoreConfig) -> tu
     return True, edge, f"proven edge {edge:+.2f}R over the random-entry baseline"
 
 
+def _n_eff(reg: dict) -> float:
+    """EFFECTIVE independent sample size (audit finding 2) — falls back to raw n on old caches."""
+    return float(reg.get("n_eff") or reg.get("n", 0) or 0)
+
+
 def edge_gate(verdict: dict | None, cfg: EdgeScoreConfig) -> tuple[str, str]:
     """Classify a setup's pooled edge for the current regime: proven / unproven /
     negative — so stage can BLOCK a money-loser and WARN on the unproven."""
     if verdict is None:
         return EDGE_UNPROVEN, "no universe edge profile yet — run `scan`; treat as discretionary"
     reg = verdict.get("regime") or verdict.get("overall")
-    if not reg or reg.get("n", 0) < cfg.min_regime_n:
+    if not reg or _n_eff(reg) < cfg.min_regime_n:
         n = reg.get("n", 0) if reg else 0
-        return EDGE_UNPROVEN, f"only {n} pooled trades in this regime (< {cfg.min_regime_n}) — unproven, discretionary"
+        ne = _n_eff(reg) if reg else 0
+        return EDGE_UNPROVEN, (f"only ~{ne:.0f} EFFECTIVE independent trades in this regime "
+                               f"({n} pooled, cross-coin correlated; < {cfg.min_regime_n}) — unproven, discretionary")
     if reg["expectancy"] <= 0:                          # absolute money-loser — block (never on the null's account)
         return EDGE_NEGATIVE, (f"PROVEN −EV across the universe ({reg['expectancy']:+.2f}R over {reg['n']}) "
                                "— refusing to stage")
@@ -614,8 +625,8 @@ def score_opportunity(
     most-specific PROVEN CONTEXT cell matching `context` (P1), else the PER-SYMBOL shrunk estimate
     for `symbol` (P5), else the flat pool."""
     reg = _context_cell_reg(profile, regime, context, cfg.sig_z) or _shrunk_reg(profile, symbol, regime)
-    if not reg or reg["n"] < cfg.min_regime_n:
-        return None                                  # unproven in the current regime
+    if not reg or _n_eff(reg) < cfg.min_regime_n:
+        return None                                  # unproven in the current regime (effective n)
     null_reg = (profile.get("null_by_regime") or {}).get(regime)
     ok, trustworthy, _ = null_adjusted_edge(reg, null_reg, cfg)
     if not ok:

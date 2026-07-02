@@ -285,6 +285,11 @@ class BacktestConfig:
     # TIME-WEIGHTED LEARNING (P7): recent trades weigh more; older fade gradually (never dropped).
     time_decay_enabled: bool = False        # OFF by default → unweighted (today's behaviour exactly)
     time_decay_half_life_days: float = 90.0 # a trade this many days old counts half — gradual decay
+    # CROSS-COIN CORRELATION (audit finding 2): pooled trades in the same time bucket ride the
+    # same market move → MEASURED design effect widens SEs/CIs (√DEFF) and gates use n_eff=n/DEFF.
+    # ON by default — this is statistical HONESTY, not risk appetite (disable only for comparison).
+    deff_enabled: bool = True
+    deff_bucket_hours: float = 24.0         # correlation cluster = same UTC day
     assumed_funding_per_8h: float = 0.0001  # flat funding assumption for usdm carry
     z: float = 1.0                 # expectancy CI half-width = z * standard error (display)
     sig_z: float = 1.65            # STRICTER z for the null-excess SIGNIFICANCE gate (~95% one-sided):

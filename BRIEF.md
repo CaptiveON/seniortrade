@@ -471,6 +471,16 @@ backtest.py + expectancy.py
     performed (breakout_retest +0.026R, trend_pullback −0.032R — they move independently).
 
   STATISTICS (is the edge real, or noise?):
+    - CROSS-COIN CORRELATION (audit finding 2 — pooled trades are NOT independent): coins ride
+      the same market move, so N pooled trades are FEWER than N independent observations. The
+      engine MEASURES it per setup (one-way ANOVA intra-cluster correlation ρ over same-UTC-day
+      buckets → Kish design effect DEFF = 1 + (m̄−1)ρ), widens EVERY SE/CI by √DEFF (per-regime
+      cells get their own estimate; the null inherits the setup's — shadows share the tapes),
+      and all sample gates use n_eff = n/DEFF instead of raw pooled n (min_regime_n, confidence
+      sample-quality). ON by default (honesty, not appetite; BACKTEST_DEFF_* to tune/compare).
+      Live (12-coin 4h pool): ρ 0.06–0.66 by setup (range_fade highest — same-day chop trades
+      echo each other), DEFF 1.0–1.4 → SEs widened ×1.0–1.2, e.g. trend_pullback 1636 pooled →
+      ~1149 effective. Degenerate inputs (no timestamps / <2 buckets) → independence assumed.
     - EXPECTANCY with a CONFIDENCE INTERVAL / bootstrap; the verdict uses the
       LOWER BOUND, not the point estimate.
     - Win rate, avg win/loss R, profit factor, system quality (expectancy ÷ SD of R).

@@ -512,3 +512,13 @@ def test_evaluate_conditioning_folds_are_chronological_not_input_order():
     rb = next(r for r in b if r["feature"] == "vol" and r["value"] == "squeeze")
     assert ra["fold_consistency"] == pytest.approx(rb["fold_consistency"])      # order-invariant
     assert ra["fold_consistency"] < 1.0                                          # early + / late − → not all folds +
+
+
+def test_edge_gate_uses_effective_n_not_raw_pooled_n():
+    # audit finding 2: 40 pooled trades that are only ~10 independent must be UNPROVEN
+    v = {"regime": {"n": 40, "n_eff": 10.0, "expectancy": 0.35, "ci_low": 0.12}, "overall": None}
+    lvl, msg = edge_gate(v, CFG)
+    assert lvl == EDGE_UNPROVEN and "EFFECTIVE" in msg
+    # same numbers with full independence stay proven (backward compat: n_eff absent → raw n)
+    v2 = {"regime": {"n": 40, "expectancy": 0.35, "ci_low": 0.12}, "overall": None}
+    assert edge_gate(v2, CFG)[0] == EDGE_PROVEN

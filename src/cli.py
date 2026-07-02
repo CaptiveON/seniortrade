@@ -881,6 +881,11 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
         body.append(f"distribution: median {o.median_r:+.2f}R · avg win {o.avg_win_r:+.2f} / "
                     f"avg loss {o.avg_loss_r:+.2f} · σ {o.std_r:.2f} · skew {o.skew_r:+.2f} · "
                     f"p10 {o.p10_r:+.2f} / p90 {o.p90_r:+.2f}\n", style="dim")
+        # audit finding 2 — cross-coin correlation: how much INDEPENDENT evidence is really here
+        if getattr(p, "deff", 1.0) > 1.0:
+            body.append(f"correlation: ρ {p.corr_rho:.2f} within same-day clusters → design effect "
+                        f"{p.deff:.2f} → effective n ≈ {o.n_eff:.0f} of {o.n} (SE widened ×{p.deff**0.5:.2f})\n",
+                        style="dim")
         body.append("by regime: ")
         for reg, s in p.by_regime.items():
             body.append(f"{reg} {s.expectancy:+.2f}R (n{s.n})   ")
@@ -911,7 +916,9 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
 
     console.print(Panel(Text(
         f"Caveats: Binance shows SURVIVORS only (delistings absent → results flattered); "
-        f"{len(profiles)} setups judged (multiple-testing — a lone +EV can be luck); costs modeled "
+        f"{len(profiles)} setups judged (multiple-testing — a lone +EV can be luck); "
+        f"pooled coins are CROSS-CORRELATED — SEs/gates use the measured effective sample "
+        f"(design effect), not raw pooled n; costs modeled "
         f"(maker/taker + slippage{', funding' if market is Market.USDM else ''}). "
         "Historical edge with stated confidence — NOT a prediction.", style="dim"),
         border_style="dim"))
@@ -955,6 +962,8 @@ def _render_board(market, context, opps, watch, settings) -> None:
                            style="dim"))
     console.print(Text("#1 is the MOST likely fluke (board-level multiple testing) — confidence is "
                        "shown for a reason; verify with `analyze` and don't chase blindly.", style="dim"))
+    console.print(Text("Pooled coins are cross-correlated: gates/confidence use the measured EFFECTIVE "
+                       "sample size (design effect), not raw pooled n.", style="dim"))
     if watch:
         console.print(Text(f"Watchlist (no proven edge yet): {', '.join(watch[:12])}", style="dim"))
     console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))

@@ -61,6 +61,8 @@ confirmation.**
        more — the edge adapts as markets evolve; older data fades, never dropped. (P7)
     └─ VALIDATION DEPTH: a robustness read (OOS folds × bootstrap × walk-forward) distinguishes
        profitable from CONSISTENTLY profitable; report-only, shown in backtest/analyze. (P6)
+    └─ CORRELATION HONESTY: cross-coin correlation is MEASURED (design effect) — SEs widened,
+       gates use effective independent n, not raw pooled n. (audit finding 2)
 12. guards + adherence (pre-trade gate: heat, lockout, cooldown, event)  ✅ done
 13. intraday runtime (speed tiers, thread-pool fetch, `watch`, bt opt)   ✅ done  ← `watch`, `--tier`
 14. journal + review (trade log, portfolio_state→guards, verdicts)       ✅ done  ← `review`

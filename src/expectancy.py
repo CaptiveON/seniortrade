@@ -32,6 +32,7 @@ class Stats:
     system_quality: float      # expectancy / SD(R)
     max_drawdown_r: float
     longest_loss_streak: int
+    n_eff: float = 0.0         # EFFECTIVE independent sample size (n / design effect); = n when independent
     # P9 — distribution shape (supplements, doesn't replace, the above)
     median_r: float = 0.0
     std_r: float = 0.0         # SD of per-trade R (variance = std_r²)
@@ -78,6 +79,9 @@ class EdgeProfile:
     bootstrap_high: float = 0.0
     recent_expectancy: float = 0.0         # mean R of the most-recent third (chronological)
     recent_n: int = 0
+    # AUDIT FINDING 2 — measured cross-coin correlation of the pooled sample
+    deff: float = 1.0                      # Kish design effect (1 = independent)
+    corr_rho: float = 0.0                  # intra-time-bucket correlation of R
 
 
 def _max_drawdown_r(rs: np.ndarray) -> float:
@@ -162,12 +166,55 @@ def summarize(rs, z: float = 1.0, weights=None) -> Stats:
         system_quality=expectancy / sd if sd > 0 else 0.0,
         max_drawdown_r=_max_drawdown_r(arr),
         longest_loss_streak=_longest_loss_streak(arr),
+        n_eff=float(n),
         median_r=float(np.median(arr)),
         std_r=sd,
         skew_r=_skew(arr),
         p10_r=float(np.percentile(arr, 10)),
         p90_r=float(np.percentile(arr, 90)),
     )
+
+
+def design_effect(entry_ts, rs, bucket_seconds: float) -> tuple[float, float]:
+    """AUDIT FINDING 2 — cross-coin correlation. Pooled trades entered in the same time
+    bucket (default: same UTC day) ride the same market move, so N pooled trades are FEWER
+    than N independent observations. MEASURE it (never assume): one-way ANOVA intra-cluster
+    correlation ρ over time buckets → Kish design effect DEFF = 1 + (m̄−1)·ρ.
+
+    Returns (deff, rho). SEs are widened by √DEFF and gates use n_eff = n / DEFF.
+    Degenerate inputs (no timestamps, <2 buckets, all-singleton buckets) → (1.0, 0.0):
+    independence assumed only when clustering cannot be estimated."""
+    ts = np.asarray(entry_ts, dtype=float)
+    y = np.asarray(rs, dtype=float)
+    if len(y) < 2 or bucket_seconds <= 0 or not np.any(ts > 0):
+        return 1.0, 0.0
+    buckets: dict = {}
+    for t, r in zip(ts, y):
+        buckets.setdefault(int(t // bucket_seconds), []).append(r)
+    k, N = len(buckets), len(y)
+    if k < 2 or k == N:                          # one bucket, or all singletons → no estimate
+        return 1.0, 0.0
+    grand = float(y.mean())
+    groups = [np.asarray(v) for v in buckets.values()]
+    msb = sum(len(g) * (float(g.mean()) - grand) ** 2 for g in groups) / (k - 1)
+    ssw = sum(float(((g - g.mean()) ** 2).sum()) for g in groups)
+    msw = ssw / (N - k) if N > k else 0.0
+    m0 = (N - sum(len(g) ** 2 for g in groups) / N) / (k - 1)   # ANOVA average cluster size
+    denom = msb + (m0 - 1) * msw
+    rho = (msb - msw) / denom if denom > 0 else 0.0
+    rho = min(1.0, max(0.0, rho))
+    deff = 1.0 + (N / k - 1.0) * rho             # Kish: mean cluster size m̄ = N/k
+    return max(1.0, deff), rho
+
+
+def _inflate_stats(s: Stats, deff: float, z: float) -> None:
+    """Widen a Stats' SE/CI by √DEFF and deflate its effective n (in place). No-op at deff≤1."""
+    if deff <= 1.0 or s.n == 0:
+        return
+    s.expectancy_se *= math.sqrt(deff)
+    s.ci_low = s.expectancy - z * s.expectancy_se
+    s.ci_high = s.expectancy + z * s.expectancy_se
+    s.n_eff = s.n / deff
 
 
 def decay_weights(entry_ts, half_life_days: float, ref_ts: float | None = None):
@@ -336,6 +383,21 @@ def evaluate(trades, *, setup: str, n_combos_tested: int, cfg, null_trades=None)
     consistency = (sum(1 for f in folds if f > 0) / len(folds)) if folds else 0.0
     mc = monte_carlo(rs, cfg.mc_runs, cfg.ruin_drawdown_r) if rs else None
 
+    # AUDIT FINDING 2 — cross-coin correlation. Pooled trades are NOT independent (coins ride
+    # the same market move); MEASURE the clustering per time bucket and widen every SE/CI by
+    # √DEFF (n_eff = n/DEFF feeds the sample gates). Per-regime cells get their OWN estimate;
+    # the null (no timestamps: shadows live on the same tapes/windows) inherits the setup's.
+    deff, corr_rho = 1.0, 0.0
+    if getattr(cfg, "deff_enabled", True):
+        bucket_s = getattr(cfg, "deff_bucket_hours", 24.0) * 3600.0
+        all_ts = [getattr(t, "entry_ts", 0.0) or 0.0 for t in trades]
+        deff, corr_rho = design_effect(all_ts, rs, bucket_s)
+        _inflate_stats(overall, deff, cfg.z)
+        for regime, ts in grouped.items():
+            d_reg, _ = design_effect([getattr(t, "entry_ts", 0.0) or 0.0 for t in ts],
+                                     [t.r for t in ts], bucket_s)
+            _inflate_stats(by_regime[regime], d_reg, cfg.z)
+
     # NULL baseline (matched-geometry random entries). The edge is the EXCESS over it.
     null_trades = null_trades or []
     null_rs = [t.r for t in null_trades]
@@ -344,6 +406,11 @@ def evaluate(trades, *, setup: str, n_combos_tested: int, cfg, null_trades=None)
     for t in null_trades:
         null_grouped.setdefault(t.regime, []).append(t.r)
     null_by_regime = {reg: summarize(v, cfg.z) for reg, v in null_grouped.items() if v}
+    if deff > 1.0:                                 # nulls share the tapes → same correlation
+        if null_overall is not None:
+            _inflate_stats(null_overall, deff, cfg.z)
+        for s_ in null_by_regime.values():
+            _inflate_stats(s_, deff, cfg.z)
     null_min = getattr(cfg, "null_min", 0)
     use_null = null_overall is not None and null_overall.n >= null_min
     null_exp = null_overall.expectancy if null_overall else 0.0
@@ -371,4 +438,5 @@ def evaluate(trades, *, setup: str, n_combos_tested: int, cfg, null_trades=None)
         gross_expectancy=gross_expectancy, exec_cost_r=exec_cost_r, funding_cost_r=funding_cost_r,
         bootstrap_low=boot_low, bootstrap_high=boot_high,
         recent_expectancy=recent_expectancy, recent_n=len(recent),
+        deff=deff, corr_rho=corr_rho,
     )
