@@ -1680,8 +1680,10 @@ def _render_action(action, warnings) -> None:
     console.print(Panel(body, title="Manage — proposed action", border_style=style, title_align="left"))
 
 
-def _manage_staged(rec, bars, last: float, word: str) -> None:
-    filled, entry_actual, why = mon.detect_paper_fill(rec, bars, last)
+def _manage_staged(rec, bars, last: float, word: str, settings) -> None:
+    # audit-walk finding 5: a resting entry unfilled past the setup's expiry window is STALE
+    filled, entry_actual, why = mon.detect_paper_fill(rec, bars, last,
+                                                      expiry_bars=settings.setups.expiry_bars)
     _render_position(rec, last, staged=True)
     if not filled and "void" in why:
         console.print(Panel(Text(f"{why} → propose CANCEL.", style="red"),
@@ -1695,15 +1697,37 @@ def _manage_staged(rec, bars, last: float, word: str) -> None:
         console.print(Panel(Text(f"Pending — {why}. Nothing to do yet.", style="dim"),
                             title="Paper-fill — pending", border_style="grey50", title_align="left"))
         return
+    # audit-walk finding 6: the touch happened somewhere in HISTORY — replay the shared state
+    # machine from the fill bar so we never propose a naive OPEN on a position whose stop
+    # (or targets) already resolved it.
+    replay = mon.replay_after_fill(rec, bars, settings.risk_mgmt)
+    if replay and replay["closed"]:
+        console.print(Panel(Text(
+            f"PAPER-FILL: {why} — but the bars SINCE the touch already CLOSED it "
+            f"at {replay['exit']:,.6g} ({replay['r']:+.2f}R, {replay['held']} bars).\n"
+            f"Propose recording the COMPLETED outcome (fill → managed → closed), not an open.",
+            style="bold red"), title="Paper-fill — already resolved in history",
+            border_style="red", title_align="left"))
+        console.bell()
+        if _confirm(word):
+            record_open(rec.id, entry_actual=entry_actual, current_stop=rec.stop_planned,
+                        managed_at=replay["fill_ts"], mode="dry-run")
+            record_close(rec.id, exit_price=replay["exit"], realized_r=replay["r"])
+            console.print(Text(f"Recorded {rec.symbol} fill→close at {replay['r']:+.2f}R (paper).",
+                               style="yellow"))
+        return
     tgts = ", ".join(f"{t:,.6g}" for t in rec.targets)
+    mark = f"\nSince the fill it marks {replay['r']:+.2f}R (still open)." if replay else ""
     console.print(Panel(Text(f"PAPER-FILL: {why}.\nWould OPEN {rec.side} {rec.symbol}: "
-                             f"entry {entry_actual:,.6g}, stop {rec.stop_planned:,.6g}, targets {tgts}.",
+                             f"entry {entry_actual:,.6g}, stop {rec.stop_planned:,.6g}, targets {tgts}."
+                             + mark,
                              style="bold cyan"), title="Paper-fill (dry-run)",
                         border_style="cyan", title_align="left"))
     console.bell()
     if not _confirm(word):
         return
-    record_open(rec.id, entry_actual=entry_actual, current_stop=rec.stop_planned, mode="dry-run")
+    record_open(rec.id, entry_actual=entry_actual, current_stop=rec.stop_planned, mode="dry-run",
+                managed_at=(replay["fill_ts"] if replay else None))
     console.print(Text(f"OPENED {rec.symbol} (paper, dry-run). Run `manage` again to manage it on real prices.",
                        style="green"))
 
@@ -1975,7 +1999,7 @@ def cmd_manage(args: argparse.Namespace) -> int:
             console.print(_data_error_panel(exc))
             continue
         if rec.status == STAGED:
-            _manage_staged(rec, bars, last, word)
+            _manage_staged(rec, bars, last, word, settings)
         else:
             _manage_open(rec, bars, last, market, settings, word, mkt)
     return 0

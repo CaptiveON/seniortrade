@@ -88,13 +88,15 @@ def _is_tighter(side: str, cur_stop: float, new_stop: float) -> bool:
 # --------------------------------------------------------------------------- #
 # Paper-fill: a STAGED dry-run trade reaches its entry on REAL prices → OPEN
 # --------------------------------------------------------------------------- #
-def detect_paper_fill(record, bars: pd.DataFrame,
-                      current_price: float) -> tuple[bool, float | None, str]:
+def detect_paper_fill(record, bars: pd.DataFrame, current_price: float,
+                      expiry_bars: int | None = None) -> tuple[bool, float | None, str]:
     """Has a STAGED trade reached its entry? Returns (filled, entry_price, why).
 
     A pre-entry invalidation hit before the fill VOIDS the setup (caller cancels).
     Market entries fill at the live price; limit/stop entries fill when their
-    level is reached over the bars since the trade was staged.
+    level is reached over the bars since the trade was staged. A resting entry
+    still unfilled after ``expiry_bars`` closed bars is STALE → voided too (the
+    setup was priced for THEN, not indefinitely — audit-walk finding 5).
     """
     et = (record.entry_type or MARKET).lower()
     long = record.side == LONG
@@ -123,7 +125,65 @@ def detect_paper_fill(record, bars: pd.DataFrame,
         return True, entry, f"{et} entry {entry:,.6g} {verb}"
     if _voided():
         return False, None, f"invalidation {inv:,.6g} hit before entry — setup void"
+    if expiry_bars and len(window) > expiry_bars:
+        return False, None, (f"unfilled for {len(window)} bars (> expiry {expiry_bars}) — "
+                             "stale, setup void")
     return False, None, f"{et} entry {entry:,.6g} not reached yet"
+
+
+def replay_after_fill(record, bars: pd.DataFrame, cfg: RiskConfig) -> dict | None:
+    """A resting entry TOUCHED somewhere in the bars since staging — what happened NEXT?
+    (Audit-walk finding 6: proposing a naive OPEN when the stop was already breached after
+    the touch mis-books history.) Replays the SHARED state machine (walk_management — the
+    same one the backtest and live manager use) from the fill bar forward:
+
+    returns {"closed", "r", "exit", "held", "fill_ts"} — closed=True means the position
+    already completed in history (record the outcome, don't 'open' it); closed=False means
+    it is genuinely still open (open it retroactively AT fill_ts so `manage` catches up the
+    since-fill bars with the same machine). None when there is no locatable fill bar
+    (market entries fill 'now'; nothing to replay)."""
+    et = (record.entry_type or MARKET).lower()
+    if et == MARKET:
+        return None
+    long = record.side == LONG
+    entry = record.entry_planned
+    window = _bars_after(bars, record.managed_at or record.timestamp)
+    j = None
+    for i in range(len(window)):
+        hi, lo = float(window["high"].iloc[i]), float(window["low"].iloc[i])
+        if et == STOP:
+            reached = (long and hi >= entry) or (not long and lo <= entry)
+        else:
+            reached = (long and lo <= entry) or (not long and hi >= entry)
+        if reached:
+            j = i
+            break
+    if j is None:
+        return None
+    # Same anti-look-ahead convention as the backtest: the fill bar opens at the entry and,
+    # for an intra-bar fill, the FAVOURABLE extreme is clamped to entry (a same-bar target
+    # that may have printed BEFORE the fill must never be credited; the stop side stays).
+    after = window.iloc[j:].copy()
+    after.iloc[0, after.columns.get_loc("open")] = entry
+    fav = "high" if long else "low"
+    after.iloc[0, after.columns.get_loc(fav)] = entry
+    realized, remaining, closed, exit_price, held = 0.0, 1.0, False, None, len(after)
+    for ev in rk.walk_management(record.side, entry, record.stop_planned,
+                                 list(record.targets), after, cfg):
+        realized += ev.realized_delta
+        remaining = ev.remaining_after
+        if ev.closes:
+            closed, exit_price, held = True, ev.fill_price, ev.bar_index + 1
+            break
+    if not closed:
+        risk = abs(entry - record.stop_planned)
+        last = float(after["close"].iloc[-1])
+        sgn = 1.0 if long else -1.0
+        mark = realized + (remaining * sgn * (last - entry) / risk if risk > 0 else 0.0)
+        return {"closed": False, "r": mark, "exit": None, "held": len(after),
+                "fill_ts": after.index[0].isoformat()}
+    return {"closed": True, "r": realized, "exit": exit_price, "held": held,
+            "fill_ts": after.index[0].isoformat()}
 
 
 # --------------------------------------------------------------------------- #

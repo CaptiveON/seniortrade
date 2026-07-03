@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 
 import pandas as pd
+import pytest
 
 from src.config import MarketsConfig, RiskConfig
 from src.monitor import (
@@ -168,3 +169,59 @@ def test_usdm_warns_on_crowded_funding_and_oi_trend():
 
 def test_unrealized_r():
     assert abs(unrealized_r(_open(), 105.0) - 1.0) < 1e-9         # +1R at +5 on a 5-wide stop
+
+
+# --- audit-walk findings 5+6: stale pending expiry + replay-after-fill ---------- #
+from src.monitor import replay_after_fill
+
+
+def test_pending_entry_expires_stale_after_expiry_bars():
+    rec = _staged(side="long", entry_planned=90.0)          # dip-buy never reached
+    rows = [[100, 101, 99, 100]] * 12                        # 12 bars since staging, no touch
+    filled, _, why = detect_paper_fill(rec, _bars(rows), 100.0, expiry_bars=8)
+    assert not filled and "stale" in why and "void" in why   # cli's cancel branch keys on 'void'
+    # under the expiry window → still just pending
+    filled, _, why2 = detect_paper_fill(rec, _bars(rows[:5]), 100.0, expiry_bars=8)
+    assert not filled and "void" not in why2
+    # no expiry arg → legacy behaviour (never stale)
+    filled, _, why3 = detect_paper_fill(rec, _bars(rows), 100.0)
+    assert not filled and "void" not in why3
+
+
+def test_replay_detects_fill_then_stop_breach_as_completed_loss():
+    # the PAXG case: short limit touched in history, then price ran THROUGH the stop.
+    rec = _staged(side="short", entry_planned=110.0, stop_planned=115.0, targets=[100.0, 95.0])
+    rows = [
+        [105, 106, 104, 105],       # staged; not touched
+        [106, 111, 105, 110],       # pops to 111 → limit 110 TOUCHED (fill bar)
+        [110, 116, 109, 115.5],     # runs through the stop 115 → stopped
+        [115, 121, 114, 120],       # keeps running (already out)
+    ]
+    out = replay_after_fill(rec, _bars(rows), RiskConfig())
+    assert out is not None and out["closed"] is True
+    assert out["exit"] == 115.0 and out["r"] == pytest.approx(-1.0)
+
+
+def test_replay_still_open_marks_to_market():
+    rec = _staged(side="short", entry_planned=110.0, stop_planned=115.0, targets=[100.0, 95.0])
+    rows = [
+        [105, 106, 104, 105],
+        [106, 111, 105, 110],       # touched; fill bar (favourable extreme clamped)
+        [109, 111, 107, 108],       # drifts our way; no stop, no TP
+    ]
+    out = replay_after_fill(rec, _bars(rows), RiskConfig())
+    assert out is not None and out["closed"] is False
+    assert out["r"] == pytest.approx((110 - 108) / 5.0)      # +0.4R mark
+    assert out["fill_ts"]                                     # retro managed_at anchor
+
+
+def test_replay_never_credits_same_bar_target_before_fill():
+    # fill bar's favourable extreme is clamped to entry — a TP that printed in the same
+    # bar as the touch must NOT be credited (the backtest's anti-look-ahead convention).
+    rec = _staged(side="short", entry_planned=110.0, stop_planned=115.0, targets=[104.0, 95.0])
+    rows = [
+        [105, 106, 104, 105],
+        [106, 111, 103.9, 105],     # touches entry AND trades through TP1 in the SAME bar
+    ]
+    out = replay_after_fill(rec, _bars(rows), RiskConfig())
+    assert out is not None and out["closed"] is False        # TP not credited on the fill bar
