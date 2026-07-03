@@ -380,10 +380,16 @@ def _render_leaderboard(rows, context, market: Market) -> None:
     table.add_column("corr", justify="right")
     table.add_column("Trend", no_wrap=True)
 
+    flagged = []
+
     def add(sym, rs, trend):
-        beta = "—" if rs.beta != rs.beta else f"{rs.beta:.2f}"
+        wild = rs.beta == rs.beta and abs(rs.beta) > 5.0    # thin-window estimate — unstable
+        beta = "—" if rs.beta != rs.beta else f"{rs.beta:.2f}" + ("!" if wild else "")
+        if wild:
+            flagged.append(sym)
         corr = "—" if rs.corr != rs.corr else f"{rs.corr:.2f}"
-        table.add_row(sym, _rs_text(rs.rel_strength_pct), beta, corr,
+        table.add_row(sym, _rs_text(rs.rel_strength_pct),
+                      Text(beta, style="yellow") if wild else beta, corr,
                       _TREND_GLYPH.get(trend, trend))
 
     leaders = rows[:5]
@@ -398,6 +404,9 @@ def _render_leaderboard(rows, context, market: Market) -> None:
     console.print(Text("Top rows lead BTC (relative strength); bottom rows lag it. "
                        "In a risk-off tide, leaders hold up best; laggards fall fastest.",
                        style="dim"))
+    if flagged:
+        console.print(Text("β! = thin-window estimate (short shared history) — unstable, treat as noise.",
+                           style="dim yellow"))
 
 
 def cmd_context(args: argparse.Namespace) -> int:
@@ -533,6 +542,10 @@ def _render_analysis(result, settings) -> None:
         head.append(f"Invalidation: {result.invalidation_note}", style="red")
     else:
         head.append(result.invalidation_note, style="yellow")
+    if result.setups and str(result.bias).lower() == "neutral":
+        head.append(f"\nNote: {len(result.setups)} tactical setup candidate(s) below — BIAS "
+                    "(the lens vote) and SETUP (a structural trigger) are separate reads.",
+                    style="cyan")
     console.print(Panel(head, title="Analysis — a READ, not a prediction",
                         border_style=_BIAS_STYLE.get(result.bias, "blue"), title_align="left"))
 
@@ -627,8 +640,9 @@ def _render_sizing_guidance(result, settings, market: Market) -> None:
     if ri.get("confidence") is not None:
         both = ""
         if ri.get("p_beats_null") is not None:
+            neg_null = " — null is negative here" if ri["p_beats_null"] > ri.get("p_positive", 0) else ""
             both = (f" [P(beats null) {ri['p_beats_null']*100:.0f}% · "
-                    f"P(>0) {ri.get('p_positive', 0)*100:.0f}%]")
+                    f"P(>0) {ri.get('p_positive', 0)*100:.0f}%{neg_null}]")
         ev.append(f"confidence {ri['confidence']*100:.0f}%{both} (n{ri.get('regime_n', 0)}, "
                   f"sample-quality {ri.get('sample_quality', 0):.2f})")
     if ri.get("sigma_r"):
@@ -866,6 +880,7 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
         )
     console.print(table)
 
+    uni_profiles = (es.load_universe(market, tf, ttl_hours=24 * 365) or {}).get("profiles") or {}
     for name, p in profiles.items():
         if p.overall.n == 0:
             continue
@@ -874,6 +889,21 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
         body.append("verdict: ")
         body.append(p.verdict, style=_VERDICT_STYLE.get(p.verdict, ""))
         body.append(" — " + "; ".join(p.notes) + "\n")
+        # audit-walk finding 4: single-coin numbers must never be mistaken for board grade —
+        # cross-reference the authoritative POOLED verdict + which regimes (if any) are proven.
+        up = uni_profiles.get(name)
+        if up:
+            gates = {r: es.edge_gate({"overall": up.get("overall"), "regime": reg,
+                                      "verdict": up.get("verdict"),
+                                      "null": (up.get("null_by_regime") or {}).get(r),
+                                      "fold_consistency": up.get("fold_consistency", 0.0)},
+                                     settings.edge)[0]
+                     for r, reg in (up.get("by_regime") or {}).items()}
+            proven = [r for r, lvl in gates.items() if lvl == es.EDGE_PROVEN]
+            body.append("pooled universe (the board's authority): "
+                        + (f"PROVEN in {', '.join(proven)}" if proven
+                           else "no regime proven — a single-coin +EV here is NOT board-grade")
+                        + f" (pooled verdict {up.get('verdict', '?')})\n", style="dim cyan")
         if p.null_n:
             body.append(f"null baseline (random entries, same exit+geometry): {p.null_expectancy:+.2f}R "
                         f"over {p.null_n} shadows → real edge over null {p.edge_vs_null:+.2f}R "
@@ -1000,8 +1030,10 @@ def _render_beta_lane(beta: dict | None) -> None:
         body.append("Best structure-timed rides (live signals, historically +EV in this regime, "
                     "NO proven timing alpha):\n", style="cyan")
         for i, c in enumerate(cands, start=1):
+            neutral = ("" if c.get("regime") == tide
+                       else f"  ·  tide-neutral structure trade (coin regime: {c.get('regime')})")
             body.append(f"  {i}. {c['symbol']}  {c['setup']} {c['side']}  ·  regime exp "
-                        f"{c['exp']:+.2f}R (n_eff {c['n_eff']:.0f})\n")
+                        f"{c['exp']:+.2f}R (n_eff {c['n_eff']:.0f}){neutral}\n")
             body.append(f"     why not alpha: {c['alpha_gap']}\n", style="dim")
     else:
         body.append("No structure-timed with-tide money-makers among live signals right now.\n",
