@@ -525,38 +525,72 @@ def test_edge_gate_uses_effective_n_not_raw_pooled_n():
 
 
 # --- PHASE 2: the BETA (market-posture) lane + near-miss transparency ---------- #
-def _beta_prof(exp, ci_low, n=300, null_exp=0.0, null_ci=None, n_eff=None):
-    return {"by_regime": {"down": {"n": n, "n_eff": n_eff or n, "expectancy": exp, "ci_low": ci_low}},
+def _beta_prof(exp, ci_low, n=300, null_exp=0.0, null_ci=None, n_eff=None, fold=1.0):
+    return {"fold_consistency": fold,
+            "by_regime": {"down": {"n": n, "n_eff": n_eff or n, "expectancy": exp, "ci_low": ci_low}},
             "null_by_regime": {"down": {"n": n, "expectancy": null_exp,
                                         "ci_low": null_ci if null_ci is not None else null_exp - 0.05}}}
 
 
-def test_beta_candidate_surfaces_with_tide_money_maker_that_fails_alpha():
+def test_beta_candidate_requires_alpha_grade_proof_of_its_own_hypothesis():
     from src.edge_score import beta_candidate
-    # +0.06R money-maker whose edge after the null misses the floor -> a beta ride
-    prof = _beta_prof(exp=0.06, ci_low=0.02, null_exp=0.0)
+    # SIGNIFICANTLY +EV cell (exp − sig_z·SE > 0), OOS-consistent, fails alpha on a positive
+    # null (drift-driven) → a PROVEN beta ride, ranked by its conservative bound.
+    prof = _beta_prof(exp=0.30, ci_low=0.20, null_exp=0.25, null_ci=0.20, fold=0.67)
     c = beta_candidate(prof, "trend_pullback", "short", "down", "ETH/USDT:USDT",
                        None, RISK_OFF, CFG)
-    assert c is not None and c["exp"] == pytest.approx(0.06)
-    assert "floor" in c["alpha_gap"] or "random" in c["alpha_gap"]      # exact shortfall reason
+    assert c is not None and c["lower"] == pytest.approx(0.30 - CFG.sig_z * 0.10)
+    assert c["fold"] == pytest.approx(0.67)
+    # the SAME cell mean with a WIDE SE (not significant) → rejected: hypothesis, not proof
+    weak = _beta_prof(exp=0.30, ci_low=0.05, null_exp=0.25, null_ci=0.20, fold=0.67)
+    assert beta_candidate(weak, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
+    # significant cell but NOT OOS fold-consistent → rejected (alpha-grade bar)
+    nofold = _beta_prof(exp=0.30, ci_low=0.20, null_exp=0.25, null_ci=0.20, fold=0.33)
+    assert beta_candidate(nofold, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
 
 
-def test_beta_candidate_rejects_counter_tide_losers_and_proven():
+def test_beta_candidate_rejects_counter_tide_losers_thin_and_proven_alpha():
     from src.edge_score import beta_candidate
-    prof = _beta_prof(exp=0.06, ci_low=0.02)
-    # counter-tide (long into RISK_OFF) -> not a tide ride
-    assert beta_candidate(prof, "x", "long", "down", "S", None, RISK_OFF, CFG) is None
-    # no tide at all -> no beta lane
-    assert beta_candidate(prof, "x", "short", "down", "S", None, NEUTRAL, CFG) is None
-    # money-loser -> nothing to ride
+    prof = _beta_prof(exp=0.30, ci_low=0.20, null_exp=0.25, null_ci=0.20, fold=1.0)
+    assert beta_candidate(prof, "x", "long", "down", "S", None, RISK_OFF, CFG) is None   # counter-tide
+    assert beta_candidate(prof, "x", "short", "down", "S", None, NEUTRAL, CFG) is None   # no tide
     loser = _beta_prof(exp=-0.10, ci_low=-0.20)
-    assert beta_candidate(loser, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
-    # PROVEN alpha (strongly beats null) -> belongs on the alpha board, not beta
+    assert beta_candidate(loser, "x", "short", "down", "S", None, RISK_OFF, CFG) is None  # loser
     proven = _beta_prof(exp=0.40, ci_low=0.30, null_exp=-0.05, null_ci=-0.10)
-    assert beta_candidate(proven, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
-    # thin effective sample -> not trustworthy enough even for beta
-    thin = _beta_prof(exp=0.06, ci_low=0.02, n=40, n_eff=8)
-    assert beta_candidate(thin, "x", "short", "down", "S", None, RISK_OFF, CFG) is None
+    assert beta_candidate(proven, "x", "short", "down", "S", None, RISK_OFF, CFG) is None  # that's ALPHA
+    thin = _beta_prof(exp=0.30, ci_low=0.20, n=40, n_eff=8)
+    assert beta_candidate(thin, "x", "short", "down", "S", None, RISK_OFF, CFG) is None    # thin n_eff
+
+
+def test_tide_drift_gate_demands_significance_like_alpha():
+    from src.edge_score import tide_drift
+    def prof(ne, nci, n=1000):
+        return {"null_by_regime": {"down": {"n": n, "expectancy": ne, "ci_low": nci}}}
+    # clearly positive drift across two setups → proven
+    proven = tide_drift({"a": prof(0.10, 0.08), "b": prof(0.12, 0.09)}, "down", CFG)
+    assert proven["proven"] and proven["lower"] > 0
+    # positive mean but too noisy → NOT proven (sig_z bound ≤ 0)
+    noisy = tide_drift({"a": prof(0.05, -0.05), "b": prof(0.04, -0.06)}, "down", CFG)
+    assert not noisy["proven"]
+    # negative drift (the current live window) → NOT proven
+    neg = tide_drift({"a": prof(-0.05, -0.08), "b": prof(-0.02, -0.04)}, "down", CFG)
+    assert not neg["proven"] and neg["mean"] < 0
+    # fewer than 2 informative cells → cannot prove
+    assert not tide_drift({"a": prof(0.10, 0.08)}, "down", CFG)["proven"]
+
+
+def test_proven_beta_is_empty_on_noise_like_profiles():
+    # the fluke-proof property alpha has: noise-shaped cells (slightly negative nulls — costs —
+    # and non-significant positive means) must produce ZERO proven-beta output.
+    from src.edge_score import beta_candidate, tide_drift
+    noise_profs = {
+        "s1": _beta_prof(exp=0.14, ci_low=-0.02, null_exp=-0.02, null_ci=-0.06, fold=0.33),
+        "s2": _beta_prof(exp=0.66, ci_low=-0.10, null_exp=-0.01, null_ci=-0.05, fold=0.67),
+        "s3": _beta_prof(exp=0.10, ci_low=-0.04, null_exp=-0.03, null_ci=-0.07, fold=0.33),
+    }
+    assert not tide_drift(noise_profs, "down", CFG)["proven"]              # gate 1 fails
+    for nm, pr in noise_profs.items():                                     # gate 2 fails too
+        assert beta_candidate(pr, nm, "short", "down", "S", None, RISK_OFF, CFG) is None
 
 
 def test_near_misses_ranked_closest_first_and_exclude_proven_and_losers():

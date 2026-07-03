@@ -974,8 +974,11 @@ def _render_board(market, context, opps, watch, settings, beta=None) -> None:
                     style="bold yellow")
         body.append("A valid, frequent result — the tool will not manufacture timing edge.",
                     style="dim")
-        if beta and (beta.get("candidates") or abs(beta.get("null_hi", 0)) > 0):
-            body.append("\nThe TIDE may still be tradable — see the BETA lane below.", style="cyan")
+        if beta:
+            has = bool(beta.get("candidates"))
+            body.append("\nSee the BETA lane below — "
+                        + ("proven tide rides exist." if has else "tide/vehicle proofs shown (none qualify)."),
+                        style="cyan")
         if watch:
             body.append(f"\nWatchlist (live setup, no proven regime-matched edge): "
                         f"{', '.join(watch[:12])}", style="dim")
@@ -1013,41 +1016,56 @@ def _render_board(market, context, opps, watch, settings, beta=None) -> None:
 
 
 def _render_beta_lane(beta: dict | None) -> None:
-    """LANE 2: BETA — the MARKET POSTURE trade (riding the BTC tide). Deliberately separate from
-    ALPHA: these candidates make money WITH the trend, not beyond it. Alpha gates untouched."""
+    """LANE 2: PROVEN BETA — held to the SAME statistical bar as alpha, on its OWN hypothesis.
+    Gate 1: the TIDE itself must be significantly +EV (combined with-tide nulls clear sig_z).
+    Gate 2: each vehicle's cell must be significantly +EV, OOS fold-consistent, adequate n_eff.
+    What a row deliberately does NOT claim is timing alpha (that is the alpha board's bar) —
+    the money is the tide's. On pure noise BOTH gates fail → the lane is empty, like alpha."""
     if not beta:
         return                                        # BTC not trending → no tide to ride
     tide = beta["tide_regime"]
     side_word = "shorts" if tide == "down" else "longs"
+    drift = beta.get("drift") or {}
     body = Text()
-    body.append(f"BTC posture {beta['posture'].upper()} — the tide itself is the trade candidate.\n",
-                style="bold")
-    body.append(f"Evidence: matched-geometry random entries across the pool earn "
-                f"{beta['null_lo']:+.2f}…{beta['null_hi']:+.2f}R in the {tide} regime "
-                f"(positive = drift is paying {side_word} regardless of timing).\n", style="dim")
+    body.append(f"BTC posture {beta['posture'].upper()} — tide regime: {tide}.\n", style="bold")
+    if drift.get("proven"):
+        body.append(f"PROVEN DRIFT: matched-geometry random {side_word} earn {drift['mean']:+.3f}R "
+                    f"(sig_z lower bound {drift['lower']:+.3f}R > 0, {drift['n']:,} shadow entries "
+                    f"across {drift['cells']} setups) — directional exposure itself is +EV here.\n",
+                    style="green")
+    else:
+        body.append(f"DRIFT NOT PROVEN: combined with-tide null {drift.get('mean', 0):+.3f}R "
+                    f"(sig_z lower bound {drift.get('lower', 0):+.3f}R ≤ 0 over "
+                    f"{drift.get('n', 0):,} shadow entries) — random {side_word} do NOT reliably "
+                    f"make money on this window, so NO beta trades are offered.\n", style="yellow")
     cands = beta.get("candidates") or []
     if cands:
-        body.append("Best structure-timed rides (live signals, historically +EV in this regime, "
-                    "NO proven timing alpha):\n", style="cyan")
+        body.append("Proven vehicles (cell significantly +EV at sig_z · OOS fold-consistent · "
+                    "ranked by conservative bound — timing alpha NOT claimed):\n", style="cyan")
         for i, c in enumerate(cands, start=1):
             neutral = ("" if c.get("regime") == tide
                        else f"  ·  tide-neutral structure trade (coin regime: {c.get('regime')})")
-            body.append(f"  {i}. {c['symbol']}  {c['setup']} {c['side']}  ·  regime exp "
-                        f"{c['exp']:+.2f}R (n_eff {c['n_eff']:.0f}){neutral}\n")
+            body.append(f"  {i}. {c['symbol']}  {c['setup']} {c['side']}  ·  cell exp {c['exp']:+.2f}R "
+                        f"(sig-bound {c['lower']:+.2f}R, n_eff {c['n_eff']:.0f}, folds {c['fold']:.0%}+)"
+                        f"{neutral}\n")
             body.append(f"     why not alpha: {c['alpha_gap']}\n", style="dim")
-    else:
-        body.append("No structure-timed with-tide money-makers among live signals right now.\n",
+    elif drift.get("proven"):
+        body.append("Tide proven, but no live vehicle clears the cell-significance + OOS bar right now.\n",
                     style="dim")
     nm = beta.get("near_misses") or []
     if nm:
-        body.append("Closest to proving ALPHA (cache-wide near-misses):\n", style="dim")
+        body.append("Closest to proving ALPHA (cache-wide near-misses — hypotheses, NOT offers):\n",
+                    style="dim")
         for m in nm:
             body.append(f"  · {m['setup']}/{m['regime']}  exp {m['exp']:+.2f}R (n_eff {m['n_eff']:.0f}) — "
                         f"{m['reason']}\n", style="dim")
-    body.append("BETA ≠ ALPHA: profits (if any) come WITH the trend, not beyond it — `analyze SYMBOL` "
-                "for entry/stop; `stage` will label it 'unproven — discretionary'; `roar` will NOT "
-                "strike these. Size conservatively; the tide can turn without notice.", style="yellow")
-    console.print(Panel(body, title="BETA — market posture (rides the BTC tide; NOT proven timing edge)",
+    body.append("PROVEN BETA ≠ ALPHA: the tide and the vehicle are each proven at sig_z, but the "
+                "TIMING adds no proven edge — profits ride the trend. Validated: on pure noise this "
+                "lane is EMPTY (0 qualifying cells), same as alpha. `stage` still labels these "
+                "'discretionary'; `roar` never strikes them; the tide can turn without notice.",
+                style="yellow")
+    console.print(Panel(body, title="BETA — proven market posture (tide + vehicle proven at sig_z; "
+                                    "timing alpha NOT claimed)",
                         border_style="cyan", title_align="left"))
 
 

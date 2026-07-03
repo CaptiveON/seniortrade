@@ -844,22 +844,56 @@ def diff_boards(prev_symbols, opportunities) -> tuple[list[str], list[str]]:
 # refuses to call "edge". These helpers surface it, clearly labelled, WITHOUT
 # touching a single alpha gate. Near-misses make "empty board" transparent.
 # --------------------------------------------------------------------------- #
+def tide_drift(profiles: dict, tide_regime: str, cfg: EdgeScoreConfig) -> dict:
+    """PROVEN-BETA gate #1 — is the TIDE itself significantly +EV? The matched-geometry null
+    shadows ARE the measurement of 'what does directional exposure earn here' (thousands of
+    random with-tide entries, net of costs). Combine every informative setup's tide-regime null
+    (n-weighted mean; SEs combined assuming independence — approximate, stated) and demand the
+    sig_z lower bound clear zero, exactly like the alpha gate demands of the timing excess.
+    Returns {mean, se, lower, n, cells, proven}."""
+    cells = []
+    for prof in (profiles or {}).values():
+        nb = (prof.get("null_by_regime") or {}).get(tide_regime)
+        if nb and nb.get("n", 0) >= cfg.min_regime_n:
+            e = float(nb["expectancy"])
+            cells.append((int(nb["n"]), e, max(1e-9, e - float(nb.get("ci_low", e)))))
+    if len(cells) < 2:
+        return {"mean": 0.0, "se": 0.0, "lower": 0.0, "n": 0, "cells": len(cells), "proven": False}
+    w = sum(n for n, _, _ in cells)
+    mean = sum(n * e for n, e, _ in cells) / w
+    se = math.sqrt(sum((n * s_) ** 2 for n, _, s_ in cells)) / w
+    lower = mean - cfg.sig_z * se
+    return {"mean": mean, "se": se, "lower": lower, "n": w, "cells": len(cells),
+            "proven": bool(lower > 0)}
+
+
 def beta_candidate(profile: dict, setup: str, side: str, regime: str, symbol: str,
                    context: dict | None, posture: str, cfg: EdgeScoreConfig) -> dict | None:
-    """A live WITH-TIDE signal whose setup×regime historically MAKES money (exp > 0 on an
-    adequate EFFECTIVE sample) but FAILED the alpha gate — it rides the trend; its timing adds
-    no proven edge beyond that. Returns a display dict with the exact alpha shortfall, else None.
-    (A cell that PASSES the alpha gate returns None — that belongs on the alpha board.)"""
+    """PROVEN-BETA gate #2 — a live WITH-TIDE vehicle held to ALPHA-GRADE rigor on ITS OWN
+    hypothesis ('this cell makes money'): the setup×regime cell must be SIGNIFICANTLY +EV at
+    the same sig_z (exp − sig_z·SE > 0, SEs already design-effect-widened), on an adequate
+    EFFECTIVE sample, OOS fold-consistent (≥0.5, like the alpha verdict) — and have FAILED
+    the alpha gate (else it belongs on the alpha board). What it deliberately does NOT prove
+    is timing alpha: the money is the tide's, not the trigger's — stated per row. Returns a
+    display dict incl. the conservative bound it is RANKED by, else None."""
     if posture not in (mc.RISK_ON, mc.RISK_OFF) or not _tide_aligned(side, posture):
         return None                                   # no tide, or fighting it → not a beta ride
     reg = _context_cell_reg(profile, regime, context, cfg.sig_z) or _shrunk_reg(profile, symbol, regime)
-    if not reg or _n_eff(reg) < cfg.min_regime_n or float(reg["expectancy"]) <= 0:
-        return None                                   # thin or money-losing → nothing to ride
+    if not reg or _n_eff(reg) < cfg.min_regime_n:
+        return None                                   # thin → not provable either way
+    e = float(reg["expectancy"])
+    se = max(1e-9, e - float(reg.get("ci_low", e)))   # 1-SE band, deff-widened
+    lower = e - cfg.sig_z * se
+    if lower <= 0:
+        return None                                   # cell not SIGNIFICANTLY +EV → hypothesis, not proof
+    if float(profile.get("fold_consistency", 0.0)) < 0.5:
+        return None                                   # not OOS-consistent → fails the alpha-grade bar
     ok, _edge, reason = null_adjusted_edge(reg, (profile.get("null_by_regime") or {}).get(regime), cfg)
     if ok:
         return None                                   # proven timing alpha → alpha board's job
     return {"symbol": symbol, "side": side, "setup": setup, "regime": regime,
-            "exp": float(reg["expectancy"]), "n_eff": _n_eff(reg), "alpha_gap": reason}
+            "exp": e, "lower": lower, "n_eff": _n_eff(reg),
+            "fold": float(profile.get("fold_consistency", 0.0)), "alpha_gap": reason}
 
 
 def near_misses(profiles: dict, cfg: EdgeScoreConfig, top: int = 3) -> list:
@@ -989,12 +1023,10 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
     beta = None
     if posture in (mc.RISK_ON, mc.RISK_OFF):
         tide_regime = "up" if posture == mc.RISK_ON else "down"
-        nulls = [(nm, float(p["null_by_regime"][tide_regime]["expectancy"]))
-                 for nm, p in profiles.items()
-                 if (p.get("null_by_regime") or {}).get(tide_regime, {}).get("n", 0) >= cfg.min_regime_n]
-        beta = {"posture": posture, "tide_regime": tide_regime,
-                "candidates": sorted(beta_cands, key=lambda d: -d["exp"])[:3],
-                "null_lo": min((x for _, x in nulls), default=0.0),
-                "null_hi": max((x for _, x in nulls), default=0.0),
-                "near_misses": near_misses(profiles, cfg)}
+        drift = tide_drift(profiles, tide_regime, cfg)
+        # PROVEN-BETA: rides are offered only when the tide ITSELF is proven +EV (gate #1);
+        # candidates already passed gate #2 (significantly +EV cell, OOS, adequate n_eff).
+        cands = sorted(beta_cands, key=lambda d: -d["lower"])[:3] if drift["proven"] else []
+        beta = {"posture": posture, "tide_regime": tide_regime, "drift": drift,
+                "candidates": cands, "near_misses": near_misses(profiles, cfg)}
     return result.context, opportunities, watchlist, beta
