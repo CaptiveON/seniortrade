@@ -69,6 +69,40 @@ python3 -m src.cli scan --usdm --tier intraday  # on the 4h/1h tier
 - **ALPHA — proven timing edge.** Only setups whose *timing* beats matched-geometry random entries (the full null + significance + effective-n gate). **An empty ALPHA lane is valid** = no proven timing edge right now.
 - **BETA — PROVEN market posture (the tide), held to the same statistical bar as alpha.** When BTC trends, the lane makes only **proven statements**: *Gate 1* — the tide itself must be significantly +EV (the combined with-tide null shadows — tens of thousands of matched random entries — must clear **sig_z**); *Gate 2* — each vehicle's setup×regime cell must be **significantly +EV at sig_z, OOS fold-consistent (≥0.5), on adequate effective n**, ranked by its conservative bound. What a row deliberately does **not** claim is timing alpha — that's the alpha board's bar; beta profits are the tide's. When either gate fails the lane says so plainly ("DRIFT NOT PROVEN … no beta trades are offered") and shows only the labeled near-miss *hypotheses*. **Validated fluke-proof:** on pure noise both gates fail — the lane is empty, exactly like alpha (the pre-hardening criterion fired on ~23% of noise cells; the proven gates fire on 0). `stage` labels beta *discretionary*; `roar` never strikes it. By default `scan` now deep-scans **all survivors** from the top-100 screen (not a fixed 8), concurrently — wider net, but a cold/full scan takes ~1–2 min. `--top N` caps it if you want it faster.
 
+### Trading a BETA candidate — the exact command sequence
+
+There is no separate beta command — a beta ride flows through the **same** gated pipeline as any trade, one coin at a time (that's deliberate: `roar` strikes only proven ALPHA baskets, never beta):
+
+```bash
+# 1. The lane. Rides appear ONLY when both proofs hold (tide +EV at sig_z AND vehicle cell
+#    significantly +EV + OOS). "DRIFT NOT PROVEN … no beta trades are offered" = stand aside.
+python3 -m src.cli scan --usdm
+
+# 2. Deep-dive the candidate from the lane (entry/stop/TPs, archetype, sizing guidance,
+#    the for/against panel — expect 'discretionary' on the edge panel, see below):
+python3 -m src.cli analyze PUMP/USDT:USDT --usdm
+
+# 3. (Optional but recommended) inspect the evidence behind its cell:
+python3 -m src.cli backtest PUMP/USDT:USDT --usdm --full
+
+# 4. Stage it — DRY-RUN: guards → plan → re-fetch → type CONFIRM; sends nothing:
+python3 -m src.cli stage PUMP/USDT:USDT --usdm
+
+# 5. Manage by the plan (paper-fill on real prices; TP1→breakeven→close, each step CONFIRMed):
+python3 -m src.cli manage --usdm
+
+# --- real money (identical rails as alpha: TESTNET first, arm flag + typed CONFIRM LIVE) ---
+python3 -m src.cli stage PUMP/USDT:USDT --usdm --testnet
+python3 -m src.cli stage PUMP/USDT:USDT --usdm --live
+python3 -m src.cli manage --usdm --live            # and --flatten as the kill switch
+```
+
+**Beta trading discipline (what's different from alpha):**
+- **The "⚠ unproven — discretionary" label at `stage` is EXPECTED, not an error.** The edge gate speaks alpha (timing): a beta ride has proven *tide* + proven *cell*, but no proven timing — the gate says exactly that, and staging proceeds on your CONFIRM as a discretionary trade.
+- **Size smaller than alpha.** Set `MGMT_EDGE_SCALED=true` and the pipeline automatically halves unproven trades (×0.5 edge multiplier); `MGMT_VOL_TARGET_ENABLED=true` additionally cuts wild cells (range_fade σ_R ≈ 4 → ~×0.4). Or simply halve `RISK_PCT` manually for beta.
+- **The premise is the tide — re-check it every session.** Re-run `scan` (or `context`): if BTC posture leaves RISK-ON/OFF, or the lane flips to "DRIFT NOT PROVEN", the reason you're in the trade is gone — tighten or close via `manage` even if the stop hasn't hit.
+- **One at a time.** No basket command for beta by design; each ride is an individual, eyes-open decision. The heat cap, daily-loss lockout, and all guards still apply.
+
 > **STATISTICAL CONFIDENCE (P2):** the `Confidence` column is now evidence-driven — it answers *"how certain are we this edge actually exists?"*, **not** "how many signals agree." It is **P(edge genuinely beats random entries) × fold-consistency** (parametric, from the cached CI — so it folds in sample size, variance, and the confidence interval in one number). `analyze` shows it broken out: e.g. *confidence 59% [P(beats null) 88% · P(>0) 96%]* — a setup can be 96% likely +EV yet only 88% likely to beat **random**, and fold-inconsistency tempers it further. Higher confidence ⇒ the edge is more certain to be real (and, with `MGMT_EDGE_SCALED`, sized larger).
 
 > **CONTEXTUAL STRATEGIES + INTERACTIONS (P1 / P4):** the board can score a coin's setup on a **proven context refinement** — a single feature (`trend_pullback ·vol=expanding`) **or a feature INTERACTION** (`breakout_momentum ·vol=expanding & mom=bear`) — when the coin's *current* context matches a cell that **earned it**: makes money AND beats the rest with **Bonferroni** significance AND is **OOS fold-consistent**; a **pair must also beat the better of its two single features** (genuine synergy, not inherited edge). Pair search is **greedy** by default (only combos built on a promising single — avoids combinatorial explosion); **`scan --hard`** tests every pair exhaustively (far stricter bar). The matched cell is shrunk toward its setup×regime parent (P5). No proven refinement / no match → plain setup×regime edge. A `·label` tag means a refinement scored it. *(On the current universe none clears the strict bar — a marginal greedy pair didn't survive a re-screen or `--hard`; the wiring is live and auto-activates when a stable one earns it.)*
