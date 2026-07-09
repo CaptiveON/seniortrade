@@ -436,6 +436,7 @@ class Settings:
     order: OrderConfig = field(default_factory=OrderConfig)
     optimize: OptimizeConfig = field(default_factory=OptimizeConfig)
     live: LiveConfig = field(default_factory=LiveConfig)
+    profile: str | None = None     # active RISK PROFILE name (None = raw config, today's defaults)
     api_key: str | None = None
     api_secret: str | None = None
 
@@ -593,6 +594,101 @@ def apply_tier(settings: Settings, tier_name: str | None) -> Settings:
         edge=replace(settings.edge, tf=tier.tf_trigger),
         backtest=replace(settings.backtest, candle_limit=tier.backtest_candle_limit),
     )
+
+
+# ---------------------------------------------------------------------------- #
+# RISK PROFILES (Phase 3 — the operator's command authority). A profile moves
+# CAPITAL/EXPOSURE (Category A) and SELECTIVITY (Category B) ONLY — how hard you
+# press on proven edges, never what counts as proven. Statistical honesty
+# (null/sig_z/Bonferroni/effective-n/sample floors) and live safety rails are
+# HONESTY-LOCKED below and enforced at import; a profile that touches them
+# cannot exist. Precedence: defaults → tier → PROFILE → explicit env (env wins).
+# No profile set → raw defaults: exactly today's behaviour.
+# ---------------------------------------------------------------------------- #
+_HONESTY_LOCKED: set[tuple[str, str]] = {
+    ("edge", "sig_z"), ("edge", "min_regime_n"), ("edge", "shrink_min_n"), ("edge", "context_min_n"),
+    ("backtest", "sig_z"), ("backtest", "null_k"), ("backtest", "null_min"), ("backtest", "min_sample"),
+    ("backtest", "deff_enabled"), ("backtest", "deff_bucket_hours"),
+} | _PROTECTED
+
+RISK_PROFILES: dict[str, dict[str, dict]] = {
+    # L0 — the safest posture: base appetite, every self-throttle ON.
+    "L0": {"risk": {"risk_pct": 1.0},
+           "risk_mgmt": {"dd_scale_enabled": True, "vol_target_enabled": True, "kelly_enabled": True,
+                          "kelly_fraction": 0.25, "edge_scaled": True, "max_risk_pct": 5.0, "min_net_rr": 1.2},
+           "guards": {"heat_cap_pct": 6.0, "max_positions": 5, "max_per_group": 2, "daily_loss_limit_r": 3.0},
+           "edge": {"floor": 0.05}},
+    "L1": {"risk": {"risk_pct": 1.5},
+           "risk_mgmt": {"dd_scale_enabled": True, "vol_target_enabled": True, "kelly_enabled": True,
+                          "kelly_fraction": 0.25, "edge_scaled": True, "max_risk_pct": 6.0, "min_net_rr": 1.2},
+           "guards": {"heat_cap_pct": 9.0, "max_positions": 6, "max_per_group": 2, "daily_loss_limit_r": 4.0},
+           "edge": {"floor": 0.04}},
+    "L2": {"risk": {"risk_pct": 3.0},
+           "risk_mgmt": {"dd_scale_enabled": True, "vol_target_enabled": True, "kelly_enabled": True,
+                          "kelly_fraction": 0.334, "edge_scaled": True, "edge_max_mult": 2.5,
+                          "max_risk_pct": 10.0, "min_net_rr": 1.1},
+           "guards": {"heat_cap_pct": 15.0, "max_positions": 8, "max_per_group": 3, "daily_loss_limit_r": 6.0},
+           "edge": {"floor": 0.03}},
+    # L3 — presses hardest AND stops self-throttling (dd-scale/vol-target OFF): eyes open.
+    "L3": {"risk": {"risk_pct": 5.0},
+           "risk_mgmt": {"dd_scale_enabled": False, "vol_target_enabled": False, "kelly_enabled": True,
+                          "kelly_fraction": 0.5, "edge_scaled": True, "edge_max_mult": 3.0,
+                          "max_risk_pct": 15.0, "min_net_rr": 1.0},
+           "guards": {"heat_cap_pct": 25.0, "max_positions": 12, "max_per_group": 4, "daily_loss_limit_r": 10.0},
+           "edge": {"floor": 0.02}},
+}
+PROFILE_LABELS = {"L0": "CONSERVATIVE", "L1": "CAUTIOUS", "L2": "MEDIUM", "L3": "HIGH"}
+
+
+def _validate_profile_registry() -> None:
+    """Import-time guarantee: no profile can touch an honesty-locked or protected field."""
+    for name, sections in RISK_PROFILES.items():
+        for sec, fields in sections.items():
+            for f in fields:
+                if (sec, f) in _HONESTY_LOCKED:
+                    raise AssertionError(f"risk profile {name} illegally touches locked {sec}.{f}")
+
+
+_validate_profile_registry()
+
+
+def apply_profile(settings: Settings, name: str | None) -> Settings:
+    """Overlay a named RISK PROFILE (None → unchanged). Applied UNDER env overrides, so an
+    explicit env var always beats the profile. Refuses unknown names and incoherent results."""
+    if not name:
+        return settings
+    key = name.strip().upper()
+    if key not in RISK_PROFILES:
+        raise ValueError(f"unknown risk profile {name!r} — choose from {sorted(RISK_PROFILES)}")
+    s = settings
+    for sec, fields in RISK_PROFILES[key].items():
+        s = replace(s, **{sec: replace(getattr(s, sec), **fields)})
+    s = replace(s, profile=key)
+    if s.risk.risk_pct > s.risk_mgmt.max_risk_pct:
+        raise ValueError(f"profile {key} incoherent: base risk {s.risk.risk_pct}% exceeds ceiling")
+    return s
+
+
+# Measured on the planted-edge lab (see AUDITREPORT): approximate small-sample fluke
+# rate at the board's real sample sizes for each significance bar.
+_FLUKE_POINTS = ((1.65, 5.0), (1.28, 12.0), (1.00, 16.0))
+
+
+def strictness_fluke_note(sig_z: float) -> str | None:
+    """None when sig_z is at the default bar; else an honest cost estimate for the echo."""
+    if abs(sig_z - 1.65) < 1e-9:
+        return None
+    pts = sorted(_FLUKE_POINTS)
+    if sig_z <= pts[0][0]:
+        est = pts[0][1]
+    elif sig_z >= pts[-1][0]:
+        est = pts[-1][1]
+    else:
+        for (x0, y0), (x1, y1) in zip(pts, pts[1:]):
+            if x0 <= sig_z <= x1:
+                est = y1 + (y0 - y1) * (sig_z - x1) / (x0 - x1)
+                break
+    return f"sig_z {sig_z:g} → expected fluke rate ~{est:.0f}% (default 1.65 ≈ 5%)"
 
 
 def with_overrides(settings: Settings, **screener_overrides) -> Settings:

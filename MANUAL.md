@@ -348,6 +348,24 @@ GUARDS_HEAT_CAP_PCT=6             # max TOTAL open risk as % equity
 > Size from the edge, not the appetite. Safety rails (the `--live` arm flag + confirm
 > phrase) are **never** `.env`-overridable.
 
+## Risk profiles & the strictness axis (the cockpit)
+
+```bash
+python3 -m src.cli scan --usdm --profile L2        # or: RISK_PROFILE=L2 in .env
+```
+**Profiles move appetite + selectivity only** — never what counts as proven:
+
+| | L0 CONSERVATIVE | L1 CAUTIOUS | L2 MEDIUM | L3 HIGH |
+|---|---|---|---|---|
+| risk/trade → ceiling | 1% → 5% | 1.5% → 6% | 3% → 10% | 5% → 15% |
+| heat cap / max pos | 6% / 5 | 9% / 6 | 15% / 8 | 25% / 12 |
+| edge floor · min net R:R | 0.05R · 1.2 | 0.04R · 1.2 | 0.03R · 1.1 | 0.02R · 1.0 |
+| self-throttles | all ON · ¼-Kelly | all ON · ¼ | ON · ⅓-Kelly | dd/vol **OFF** · ½-Kelly |
+
+Every run **echoes** the active posture (`RISK PROFILE L2 · MEDIUM — … [honesty gates unchanged]`), every staged trade is **journaled** with its profile, explicit env vars always **beat** the profile, and no profile can touch the honesty-locked gates (sig_z, null, effective-n, sample floors, live rails — enforced in code, tested). Note the profiles are *intelligent* appetite: L2's own protections can size a weak wild edge **below** L0-flat — pressing harder only where the edge earns it.
+
+**Strictness is a separate, deliberately-turned axis** (`EDGE_SIG_Z` / `BACKTEST_SIG_Z`): loosening the truth bar prints a red warning with its **measured cost** (1.65 ≈ 5% fluke → 1.28 ≈ 12% → 1.00 ≈ 16%). Loosen knowingly or not at all.
+
 ## Housekeeping
 
 ```bash

@@ -140,7 +140,7 @@ def record_staged(*, market, symbol, side, setup, grade, group, entry, stop, tar
                   risk_pct, risk_amount, edge_r=None, regime="", bias="", tide="",
                   tf="", entry_type="market", invalidation=0.0, leverage=1.0,
                   liquidation_price=None, mode="dry-run", in_cooldown=False,
-                  guard_blocked=False, path=None) -> str:
+                  guard_blocked=False, profile=None, path=None) -> str:
     rec = TradeRecord(
         id=uuid.uuid4().hex[:12], timestamp=_now(), market=market, symbol=symbol, side=side,
         setup=setup, grade=grade, status=STAGED, mode=mode, group=group,
@@ -149,6 +149,8 @@ def record_staged(*, market, symbol, side, setup, grade, group, entry, stop, tar
         tf=tf, entry_type=entry_type, invalidation=invalidation, leverage=leverage,
         liquidation_price=liquidation_price,
         regime=regime, bias=bias, tide=tide, in_cooldown=in_cooldown, guard_blocked=guard_blocked)
+    if profile:                                  # attribution: which risk posture staged this
+        rec.notes.append(f"risk profile: {profile}")
     append(rec, path)
     return rec.id
 

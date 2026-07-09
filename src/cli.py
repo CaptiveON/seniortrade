@@ -39,7 +39,7 @@ from .analysis import BEAR, BULL, NEUTRAL
 from .analysis import analyze as run_analyze
 from .analysis import rank_board
 from .backtest import run_backtest
-from .config import TIERS, Settings, apply_tier
+from .config import RISK_PROFILES, PROFILE_LABELS, TIERS, Settings, apply_profile, apply_tier, strictness_fluke_note
 from . import order as od
 from . import monitor as mon
 from . import live as lv
@@ -133,10 +133,33 @@ def _market_from_args(args: argparse.Namespace) -> Market:
 
 
 def _load_tiered(args: argparse.Namespace):
-    # PRECEDENCE: defaults → tier PRESET → env overrides on top (explicit env always wins over
-    # the tier), so e.g. `--tier intraday` + BACKTEST_CANDLE_LIMIT=2000 keeps 1h AND honours 2000.
+    # PRECEDENCE: defaults → tier PRESET → RISK PROFILE → env overrides on top (explicit env
+    # always wins), so `--tier intraday --profile L2` + RISK_PCT=2 keeps 1h, L2 posture, 2%.
     base = apply_tier(Settings(), getattr(args, "tier", None))
-    return load_settings(base=base)
+    prof = getattr(args, "profile", None) or os.getenv("RISK_PROFILE") or None
+    base = apply_profile(base, prof)
+    settings = load_settings(base=base)
+    _echo_posture(settings)
+    return settings
+
+
+def _echo_posture(s) -> None:
+    """Command authority is never ambiguous: every run states its risk posture, and any
+    loosened TRUTH bar is called out with its measured cost (never silent)."""
+    if s.profile:
+        m, g = s.risk_mgmt, s.guards
+        stages = (f"dd-scale {'ON' if m.dd_scale_enabled else 'OFF'} · vol-target "
+                  f"{'ON' if m.vol_target_enabled else 'OFF'} · Kelly "
+                  f"{('1/'+str(round(1/m.kelly_fraction))) if m.kelly_enabled else 'OFF'}")
+        console.print(Text(
+            f"RISK PROFILE {s.profile} · {PROFILE_LABELS.get(s.profile, '')} — "
+            f"risk {s.risk.risk_pct:g}%/trade · ceiling {m.max_risk_pct:g}% · heat {g.heat_cap_pct:g}% · "
+            f"floor {s.edge.floor:g}R · {stages}  [honesty gates unchanged]",
+            style="bold yellow" if s.profile in ("L2", "L3") else "green"))
+    note = strictness_fluke_note(s.edge.sig_z)
+    if note:
+        console.print(Text(f"⚠ STRICTNESS ALTERED (research axis): {note} — size down accordingly.",
+                           style="bold red"))
 
 
 def _settings_with_screen_overrides(args: argparse.Namespace):
@@ -1672,6 +1695,7 @@ def cmd_stage(args: argparse.Namespace) -> int:
 
     regime = result.structure.state.trend if (result.structure and result.structure.state) else ""
     tid = record_staged(
+        profile=settings.profile,
         market=market.value, symbol=symbol, side=signal.direction, setup=signal.setup,
         grade=signal.grade, group=proposed.group, entry=plan.entry, stop=plan.stop,
         targets=list(plan.targets), risk_pct=result.risk_pct, risk_amount=plan.risk_actual,
@@ -2334,6 +2358,7 @@ def cmd_roar(args: argparse.Namespace) -> int:
     for (a, sig, plan, ar) in basket:
         regime = ar.structure.state.trend if (ar.structure and ar.structure.state) else ""
         tid = record_staged(
+            profile=settings.profile,
             market=market.value, symbol=a.symbol, side=sig.direction, setup=sig.setup, grade=sig.grade,
             group=a.group, entry=plan.entry, stop=plan.stop, targets=list(plan.targets),
             risk_pct=a.risk_pct, risk_amount=plan.risk_actual, edge_r=getattr(plan, "net_rr", None),
@@ -2364,6 +2389,8 @@ def build_parser() -> argparse.ArgumentParser:
     def add_tier_flag(p: argparse.ArgumentParser) -> None:
         p.add_argument("--tier", choices=sorted(TIERS), default=None,
                        help="speed tier: swing (1d/4h) | intraday (4h/1h)")
+        p.add_argument("--profile", choices=sorted(RISK_PROFILES), default=None,
+                       help="risk profile L0..L3 (appetite+selectivity only; honesty gates locked; env RISK_PROFILE works too)")
 
     # context
     p_ctx = sub.add_parser("context", help="BTC/market regime + leaders/laggards")
