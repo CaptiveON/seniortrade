@@ -16,5 +16,10 @@ rich>=13.7,<14          # terminal tables / panels
 # Uncomment once you pin a working build for your environment:
 # pandas-ta>=0.3
 
+# --- local web cockpit (UI Phase A; localhost-only, read-only) ---
+fastapi>=0.110,<1
+uvicorn>=0.29,<1
+
 # --- dev / test ---
 pytest>=8.0,<10
+httpx>=0.27,<1        # fastapi TestClient transport

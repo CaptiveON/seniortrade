@@ -348,6 +348,15 @@ GUARDS_HEAT_CAP_PCT=6             # max TOTAL open risk as % equity
 > Size from the edge, not the appetite. Safety rails (the `--live` arm flag + confirm
 > phrase) are **never** `.env`-overridable.
 
+## The web cockpit — `ui` (Phase A: read-only)
+
+```bash
+python3 -m src.cli ui          # → http://127.0.0.1:8484
+```
+The SENIORTRADE cockpit in your browser — **the same engine, a second frontend** (the CLI keeps working). Views: **Board** (two-lane ALPHA/BETA with the drift banner, near-misses, watchlist, rescan/rebuild buttons), **Analyze** (lenses, setups, plan, edge verdict + robustness, archetype conditional, why for/against, sizing evidence), **Research** (verdict table + data quality), **Lab** (P13 importance), **Positions** (the book, read-only), **Journal** (realized stats). The topbar shows tier · risk profile · strictness warnings · watch status · cache age · equity.
+
+**Safety contract:** binds to **127.0.0.1 only** (keys/data never leave the machine); **strictly read-only** — no stage/manage/roar/live route exists in the app (structurally tested); orders happen only via the CLI's typed CONFIRM. The slow board scan runs server-side in the background — the page polls.
+
 ## Risk profiles & the strictness axis (the cockpit)
 
 ```bash

@@ -90,6 +90,7 @@ Python 3.11+. The screener uses **public** Binance data — **no API key needed.
 ## Run it
 
 ```bash
+python -m src.cli ui                            # web cockpit at 127.0.0.1:8484 (read-only; same engine)
 python -m src.cli scan    --usdm --profile L2   # risk profiles L0-L3: appetite only, honesty gates locked
 python -m src.cli roar    --usdm                # MASTER: proven board → allocate budget across the basket → CONFIRM
 python -m src.cli watch   --usdm --start        # always-on radar: desktop-notify on a new proven edge (--stop/--status)

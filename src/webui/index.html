@@ -1,0 +1,318 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SENIORTRADE — proof before position</title>
+<style>
+:root{--bg:#0A0D13;--s1:#10141D;--s2:#161B27;--s3:#1C2331;--ln:#232B3A;--tx:#E9EDF5;--t2:#97A1B4;--t3:#5B6474;
+--em:#2EE6A8;--cy:#35C8F5;--am:#F5B942;--rd:#F26D6D;--pu:#A78BFA;
+--mono:"JetBrains Mono","SF Mono",Menlo,Consolas,monospace;--ui:Inter,-apple-system,system-ui,sans-serif}
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--tx);font-family:var(--ui);font-size:13px}
+a{color:var(--cy)}
+.top{display:flex;align-items:center;gap:14px;padding:10px 18px;background:var(--s1);border-bottom:1px solid var(--ln)}
+.logo{display:flex;align-items:center;gap:10px}.mark{border:1px solid var(--em);background:rgba(46,230,168,.14);color:var(--em);border-radius:6px;padding:2px 8px;font-family:var(--mono);font-weight:700}
+.brand b{font-family:var(--mono);letter-spacing:.06em}.brand small{display:block;color:var(--t3);font-family:var(--mono);font-size:8px;letter-spacing:.2em}
+.chips{display:flex;gap:8px;flex:1;justify-content:flex-end;flex-wrap:wrap}
+.chip{font-family:var(--mono);font-size:10px;padding:4px 10px;border-radius:999px;border:1px solid;letter-spacing:.04em}
+.chip.em{color:var(--em);border-color:rgba(46,230,168,.5);background:rgba(46,230,168,.08)}
+.chip.cy{color:var(--cy);border-color:rgba(53,200,245,.5);background:rgba(53,200,245,.08)}
+.chip.am{color:var(--am);border-color:rgba(245,185,66,.5);background:rgba(245,185,66,.08)}
+.chip.rd{color:var(--rd);border-color:rgba(242,109,109,.5);background:rgba(242,109,109,.08)}
+.chip.t2{color:var(--t2);border-color:var(--ln);background:var(--s2)}
+.wrap{display:flex;min-height:calc(100vh - 53px)}
+nav{width:200px;background:var(--s1);padding:14px 10px;display:flex;flex-direction:column;gap:4px}
+nav button{all:unset;cursor:pointer;display:flex;gap:10px;align-items:center;padding:9px 12px;border-radius:8px;color:var(--t2);font-family:var(--ui);font-size:12.5px}
+nav button .ic{font-family:var(--mono);color:var(--t3)}
+nav button.on{background:rgba(46,230,168,.1);color:var(--tx);font-weight:600}nav button.on .ic{color:var(--em)}
+nav .grow{flex:1}
+.dry{border:1px solid rgba(245,185,66,.5);background:rgba(245,185,66,.07);border-radius:8px;padding:8px 10px;font-size:9px;color:var(--t2)}
+.dry b{display:block;color:var(--am);font-family:var(--mono);letter-spacing:.1em;font-size:10px}
+main{flex:1;padding:16px 18px;max-width:1400px}
+.panel{background:var(--s1);border:1px solid var(--ln);border-radius:12px;margin-bottom:14px;overflow:hidden}
+.panel.cyb{border-color:rgba(53,200,245,.35)}
+.ph{display:flex;align-items:center;gap:10px;padding:12px 16px}
+.ph h2{font-family:var(--mono);font-size:13px;letter-spacing:.08em}
+.ph h2.em{color:var(--em)}.ph h2.cyt{color:var(--cy)}
+.ph .sub{color:var(--t2);font-size:11px}.ph .sp{flex:1}
+.seal{display:inline-flex;gap:6px;align-items:center;font-family:var(--mono);font-size:9.5px;font-weight:700;letter-spacing:.04em;padding:3px 9px;border-radius:4px;border:1px solid}
+.seal:before{content:"";width:5px;height:5px;border-radius:50%;background:currentColor}
+.seal.em{color:var(--em);border-color:rgba(46,230,168,.6);background:rgba(46,230,168,.12)}
+.seal.cy{color:var(--cy);border-color:rgba(53,200,245,.6);background:rgba(53,200,245,.12)}
+.seal.am{color:var(--am);border-color:rgba(245,185,66,.6);background:rgba(245,185,66,.12)}
+.seal.rd{color:var(--rd);border-color:rgba(242,109,109,.6);background:rgba(242,109,109,.12)}
+table{width:100%;border-collapse:collapse}
+th{font-family:var(--mono);font-size:8.5px;letter-spacing:.12em;color:var(--t3);text-align:left;padding:6px 16px;background:var(--s2)}
+td{font-family:var(--mono);font-size:11px;padding:9px 16px;vertical-align:middle}
+tr.alt td{background:var(--s2)}
+.short{color:var(--rd);font-weight:700}.long{color:var(--em);font-weight:700}
+.grade{display:inline-block;padding:1px 7px;border-radius:4px;font-weight:700}
+.grade.A,.grade.B{color:var(--em);background:rgba(46,230,168,.15)}.grade.C{color:var(--am);background:rgba(245,185,66,.15)}
+.grade.D,.grade.F{color:var(--rd);background:rgba(242,109,109,.15)}
+.bar{height:4px;border-radius:2px;background:var(--s3);width:140px;margin-top:3px}.bar i{display:block;height:4px;border-radius:2px;background:var(--em)}
+.foot{padding:8px 16px 12px;color:var(--t3);font-size:9px}
+.pad{padding:12px 16px}
+.banner{margin:0 16px 10px;padding:8px 14px;border-radius:8px;font-size:11px}
+.banner.ok{background:rgba(53,200,245,.07);color:var(--t2)}.banner.ok b{color:var(--cy);font-family:var(--mono)}
+.banner.no{background:rgba(245,185,66,.07);color:var(--am)}
+.veh{margin:0 16px 8px;background:var(--s2);border-radius:8px;padding:9px 14px}
+.veh .l1{display:flex;gap:10px;align-items:center;font-family:var(--mono);font-size:11px}
+.veh .why{color:var(--t3);font-size:9.5px;margin-top:3px}
+.nm{margin:0 16px 8px;border:1px dashed var(--ln);border-radius:8px;padding:8px 14px;color:var(--t2);font-family:var(--mono);font-size:9.5px}
+.warn{padding:6px 16px 12px;color:var(--am);font-size:9.5px}
+.wl{display:flex;gap:6px;flex-wrap:wrap;padding:4px 16px 12px}
+.wl span{font-family:var(--mono);font-size:10px;color:var(--t2);border:1px solid var(--ln);background:var(--s2);border-radius:6px;padding:3px 9px}
+.btn{all:unset;cursor:pointer;font-family:var(--mono);font-size:10px;font-weight:700;letter-spacing:.04em;padding:8px 14px;border-radius:8px;border:1px solid}
+.btn.em{color:var(--em);border-color:rgba(46,230,168,.6);background:rgba(46,230,168,.14)}
+.btn.t2{color:var(--t2);border-color:var(--ln)}
+.btn:disabled{opacity:.45;cursor:default}
+input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8px;color:var(--tx);font-family:var(--mono);font-size:12px;padding:8px 12px;width:260px}
+.grid2{display:grid;grid-template-columns:1fr 430px;gap:14px}
+.kv{display:flex;gap:8px;padding:2px 0;font-size:11px}.kv b{font-family:var(--mono);color:var(--t3);font-size:9px;letter-spacing:.06em;min-width:84px;padding-top:1px}
+.kv span{font-family:var(--mono)}
+.pos .sup{color:var(--em)}.neg .sup{color:var(--rd)}
+.why-line{font-size:10.5px;padding:2px 0}
+.spin{color:var(--t3);font-family:var(--mono);font-size:11px;padding:20px;text-align:center}
+.err{color:var(--rd);font-family:var(--mono);font-size:11px;padding:12px 16px}
+.statgrid{display:flex;gap:10px;padding:0 16px 12px}
+.stat{flex:1;background:var(--s2);border:1px solid var(--ln);border-radius:10px;padding:10px 14px}
+.stat b{display:block;font-family:var(--mono);font-size:16px}.stat i{font-style:normal;color:var(--t3);font-family:var(--mono);font-size:8px;letter-spacing:.08em}
+.hide{display:none}
+</style>
+</head>
+<body>
+<div class="top">
+  <div class="logo"><span class="mark">◮</span><span class="brand"><b>SENIORTRADE</b><small>PROOF BEFORE POSITION</small></span></div>
+  <div class="chips" id="chips"><span class="chip t2">connecting…</span></div>
+</div>
+<div class="wrap">
+  <nav id="nav">
+    <button data-v="board" class="on"><span class="ic">▦</span>Board</button>
+    <button data-v="analyze"><span class="ic">◭</span>Analyze</button>
+    <button data-v="research"><span class="ic">⌗</span>Research</button>
+    <button data-v="lab"><span class="ic">⚗</span>Lab</button>
+    <button data-v="positions"><span class="ic">❖</span>Positions</button>
+    <button data-v="journal"><span class="ic">✦</span>Journal</button>
+    <div class="grow"></div>
+    <div class="dry"><b>DRY-RUN · READ-ONLY</b>orders exist only via the CLI's typed CONFIRM</div>
+  </nav>
+  <main>
+    <section id="v-board">
+      <div class="panel">
+        <div class="ph"><h2 class="em">ALPHA</h2><span class="sub">proven timing edge — beats matched random entries at sig 1.65</span><span class="sp"></span>
+          <span id="alpha-seal" class="seal am">—</span>
+          <button class="btn t2" onclick="rescan(false)">⟳ RESCAN</button>
+          <button class="btn em" onclick="rescan(true)" title="scan --refresh">⟳ REBUILD CACHE</button></div>
+        <div id="alpha-body"><div class="spin">no scan yet — press RESCAN</div></div>
+      </div>
+      <div class="panel cyb">
+        <div class="ph"><h2 class="cyt">BETA</h2><span class="sub">proven market posture — tide + vehicle each proven at sig 1.65 · timing alpha NOT claimed</span><span class="sp"></span><span id="beta-seal" class="seal am">—</span></div>
+        <div id="beta-body"><div class="spin">—</div></div>
+      </div>
+      <div class="panel"><div class="ph"><h2>WATCHLIST</h2><span class="sub">live setups, no proven edge yet</span></div><div class="wl" id="watchlist"></div></div>
+    </section>
+
+    <section id="v-analyze" class="hide">
+      <div class="panel"><div class="ph">
+        <h2>◭ ANALYZE</h2>
+        <input type="text" id="an-sym" placeholder="PUMP/USDT:USDT" value="">
+        <button class="btn em" onclick="doAnalyze()">RUN</button>
+        <span class="sub">a READ, not a prediction — six lenses · setups · plan · proofs</span></div>
+        <div id="an-out"><div class="spin">enter a symbol</div></div>
+      </div>
+    </section>
+
+    <section id="v-research" class="hide">
+      <div class="panel"><div class="ph">
+        <h2>⌗ RESEARCH</h2>
+        <input type="text" id="bt-sym" placeholder="PUMP/USDT:USDT">
+        <button class="btn em" onclick="doBacktest()">BACKTEST</button>
+        <span class="sub">same code as live · null baseline · deff-honest CIs · block-bootstrap MC</span></div>
+        <div id="bt-out"><div class="spin">enter a symbol (takes ~10–60s)</div></div>
+      </div>
+    </section>
+
+    <section id="v-lab" class="hide">
+      <div class="panel"><div class="ph"><h2>⚗ LAB</h2><span class="sub">P13 feature importance — recomputed each cache rebuild · ● seeds P4 pairs</span></div>
+        <div id="lab-out" class="pad"><div class="spin">loading…</div></div></div>
+    </section>
+
+    <section id="v-positions" class="hide">
+      <div class="panel"><div class="ph"><h2>❖ POSITIONS</h2><span class="sub">the paper/live book — manage & confirm actions via CLI (Phase B brings them here)</span></div>
+        <div id="pos-out" class="pad"><div class="spin">loading…</div></div></div>
+    </section>
+
+    <section id="v-journal" class="hide">
+      <div class="panel"><div class="ph"><h2>✦ JOURNAL</h2><span class="sub">realized performance · promise vs delivery</span></div>
+        <div id="jr-out"><div class="spin">loading…</div></div></div>
+    </section>
+  </main>
+</div>
+<script>
+const $=q=>document.querySelector(q);
+const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
+const j=async(u,opt)=>{const r=await fetch(u,opt);if(!r.ok)throw new Error((await r.json().catch(()=>({}))).detail||r.status);return r.json()};
+const fmtR=x=>(x>=0?"+":"")+(+x).toFixed(2)+"R";
+
+/* nav */
+document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
+  document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
+  document.querySelectorAll("main section").forEach(s=>s.classList.add("hide"));
+  $("#v-"+b.dataset.v).classList.remove("hide");
+  if(b.dataset.v==="lab")loadLab();if(b.dataset.v==="positions")loadPos();if(b.dataset.v==="journal")loadJournal();
+});
+
+/* topbar */
+async function loadStatus(){
+  try{
+    const s=await j("/api/status");
+    const c=[];
+    c.push(`<span class="chip t2">${esc(s.tier)} · SWING</span>`);
+    if(s.profile)c.push(`<span class="chip ${['L2','L3'].includes(s.profile)?'am':'em'}">PROFILE ${esc(s.profile)} ${esc(s.profile_label)}</span>`);
+    else c.push('<span class="chip t2">PROFILE — raw config</span>');
+    if(s.strictness_note)c.push(`<span class="chip rd">⚠ ${esc(s.strictness_note)}</span>`);
+    c.push(`<span class="chip ${s.watch.running?'em':'t2'}">WATCH ${s.watch.running?'● live':'stopped'}</span>`);
+    if(s.cache.ts){const age=Math.round((Date.now()/1000-s.cache.ts)/3600);c.push(`<span class="chip t2">cache ${age}h · ${s.cache.coins} coins</span>`)}
+    c.push(`<span class="chip em">$${(+s.equity).toLocaleString()}</span>`);
+    $("#chips").innerHTML=c.join("");
+  }catch(e){$("#chips").innerHTML=`<span class="chip rd">API offline</span>`}
+}
+
+/* board */
+let polling=null;
+async function loadBoard(){
+  const d=await j("/api/board");
+  if(d.error){$("#alpha-body").innerHTML=`<div class="err">${esc(d.error)}</div>`;}
+  if(d.scanning){
+    $("#alpha-seal").textContent="SCANNING…";$("#alpha-seal").className="seal cy";
+    if(!polling)polling=setInterval(loadBoard,4000);
+    if(!d.board)return;
+  } else { if(polling){clearInterval(polling);polling=null;loadStatus();} }
+  const b=d.board;if(!b)return;
+  /* alpha */
+  const a=b.alpha||[];
+  $("#alpha-seal").textContent=d.scanning?"SCANNING…":`${a.length} PROVEN`;
+  $("#alpha-seal").className="seal "+(d.scanning?"cy":(a.length?"em":"am"));
+  if(!a.length){
+    $("#alpha-body").innerHTML=`<div class="pad" style="color:var(--am)"><b>NO PROVEN ALPHA</b> — no setup's timing beats random entries here. A valid, frequent result — the engine will not manufacture timing edge.</div>`;
+  }else{
+    $("#alpha-body").innerHTML=`<table><tr><th>#</th><th>SYMBOL</th><th>SIDE</th><th>SETUP</th><th>EDGE</th><th>GRADE</th><th>CONFIDENCE</th><th>FRESH</th><th>REGIME</th></tr>`+
+    a.map((o,i)=>`<tr class="${i%2?'alt':''}"><td>${i+1}</td><td><b>${esc(o.symbol)}</b></td><td class="${o.side}">${esc(o.side).toUpperCase()}</td><td>${esc(o.setup)}${o.context_label?' ·'+esc(o.context_label):''}</td><td><b>${fmtR(o.edge_score_r)}</b></td><td><span class="grade ${esc(o.grade)}">${esc(o.grade)}</span></td><td>${esc(o.confidence_tier)} · ${(o.confidence*100).toFixed(0)}% · n${o.regime_n}<div class="bar"><i style="width:${Math.min(100,o.confidence*100)}%"></i></div></td><td>${esc(o.fresh)}</td><td>${esc(o.regime)}</td></tr>`).join("")+
+    `</table><div class="foot">confidence = P(beats random) × fold-consistency · #1 is the most fluke-prone (board-level multiple testing) · gates use EFFECTIVE n</div>`;
+  }
+  /* beta */
+  const bt=b.beta;
+  if(!bt){$("#beta-seal").textContent="NO TIDE";$("#beta-seal").className="seal t2 am";
+    $("#beta-body").innerHTML=`<div class="pad" style="color:var(--t3)">BTC posture neutral — no tide to ride.</div>`;}
+  else{
+    const dr=bt.drift||{};
+    $("#beta-seal").textContent=dr.proven?"TIDE PROVEN":"DRIFT NOT PROVEN";
+    $("#beta-seal").className="seal "+(dr.proven?"cy":"am");
+    let h="";
+    if(dr.proven)h+=`<div class="banner ok"><b>▲ PROVEN DRIFT</b> random matched entries earn ${fmtR(dr.mean)} · sig-low ${fmtR(dr.lower)} &gt; 0 · ${(dr.n||0).toLocaleString()} shadows across ${dr.cells} setups — directional exposure itself is +EV</div>`;
+    else h+=`<div class="banner no">DRIFT NOT PROVEN: combined with-tide null ${fmtR(dr.mean||0)} (sig-low ${fmtR(dr.lower||0)} ≤ 0 over ${(dr.n||0).toLocaleString()} shadows) — random entries do NOT reliably make money on this window, so NO beta trades are offered.</div>`;
+    for(const v of (bt.candidates||[]))
+      h+=`<div class="veh"><div class="l1"><b>${esc(v.symbol)}</b><span>${esc(v.setup)}</span><span class="${v.side}">${esc(v.side).toUpperCase()}</span><span style="color:var(--cy)">cell ${fmtR(v.exp)}</span><span style="color:var(--t2)">sig-bound ${fmtR(v.lower)} · n_eff ${Math.round(v.n_eff)} · folds ${(v.fold*100).toFixed(0)}%</span></div><div class="why">why not alpha: ${esc(v.alpha_gap)}</div></div>`;
+    const nm=bt.near_misses||[];
+    if(nm.length)h+=`<div class="nm">NEAR-MISSES — closest to proving ALPHA (hypotheses, NOT offers)<br>`+nm.map(m=>`· ${esc(m.setup)}/${esc(m.regime)} ${fmtR(m.exp)} (n_eff ${Math.round(m.n_eff)}) — ${esc(m.reason)}`).join("<br>")+`</div>`;
+    h+=`<div class="warn">⚠ PROVEN BETA ≠ ALPHA: profits ride WITH the trend · stage labels these discretionary · roar never strikes them · validated: 0 qualifying cells on pure noise</div>`;
+    $("#beta-body").innerHTML=h;
+  }
+  $("#watchlist").innerHTML=(b.watchlist||[]).map(s=>`<span>${esc(s.split("/")[0])}</span>`).join("")||'<span>—</span>';
+}
+async function rescan(refresh){
+  await fetch("/api/board/refresh"+(refresh?"?refresh=true":""),{method:"POST"});
+  loadBoard();
+}
+
+/* analyze */
+async function doAnalyze(){
+  const sym=$("#an-sym").value.trim();if(!sym)return;
+  $("#an-out").innerHTML=`<div class="spin">analyzing ${esc(sym)}…</div>`;
+  try{
+    const r=await j("/api/analyze/"+encodeURIComponent(sym));
+    let h=`<div class="pad" style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
+      <b style="font-family:var(--mono);font-size:16px">${esc(r.symbol)}</b>
+      <span style="font-family:var(--mono);color:var(--t2)">${r.last}</span>
+      ${r.archetype?`<span class="chip" style="color:var(--pu);border-color:rgba(167,139,250,.5)">ARCHETYPE · ${esc(r.archetype).toUpperCase()}</span>`:""}
+      ${r.funding?`<span class="chip t2">funding ${(r.funding.rate*100).toFixed(4)}% · ${esc(r.funding.signal)}</span>`:""}
+      ${r.oi?`<span class="chip am">OI ${esc(r.oi.trend)}</span>`:""}
+      <span class="chip t2">bias ${esc(r.bias)} · HTF ${esc(r.htf_trend)} · ${esc(r.location)}</span></div>`;
+    h+=`<div class="pad"><table><tr><th>LENS</th><th>READ</th><th>SCORE</th><th>NOTE</th></tr>`+
+      r.lenses.map((L,i)=>`<tr class="${i%2?'alt':''}"><td>${esc(L.name)}</td><td class="${L.read==='bull'?'long':L.read==='bear'?'short':''}">${esc(L.read)}</td><td>${(L.score>=0?"+":"")+L.score.toFixed(2)}</td><td style="color:var(--t2)">${esc(L.note)}</td></tr>`).join("")+`</table></div>`;
+    if(r.conflicts.length)h+=`<div class="banner no">⚠ ${r.conflicts.map(esc).join(" · ")}</div>`;
+    if(r.setups.length){
+      h+=`<div class="pad"><table><tr><th>SETUP</th><th>SIDE</th><th>GRADE</th><th>ENTRY</th><th>STOP</th><th>TARGETS</th><th>WHY</th></tr>`+
+      r.setups.map((t,i)=>`<tr class="${i%2?'alt':''}"><td><b>${esc(t.setup)}</b></td><td class="${t.side}">${esc(t.side).toUpperCase()}</td><td><span class="grade ${esc(t.grade)}">${esc(t.grade)}</span></td><td>${t.entry}</td><td>${t.stop}</td><td>${t.targets.join(" · ")}</td><td style="color:var(--t2)">${esc(t.why)}</td></tr>`).join("")+`</table></div>`;
+    } else h+=`<div class="pad" style="color:var(--t3)">no setup candidates right now</div>`;
+    if(r.edge)h+=`<div class="banner ${r.edge.level==='proven'?'ok':'no'}"><b>${esc(r.edge.setup)} in ${esc(r.edge.regime)}:</b> ${esc(r.edge.msg)}${r.edge.robustness?` · robustness ${r.edge.robustness.score.toFixed(2)} (${esc(r.edge.robustness.label)})`:""}</div>`;
+    if(r.archetype_evidence)h+=`<div class="banner ok" style="color:var(--pu)">conditional: ${esc(r.edge?.setup)} in ${esc(r.archetype).toUpperCase()} ${fmtR(r.archetype_evidence.exp)} over ${r.archetype_evidence.n} pooled — ${r.archetype_evidence.proven?"PROVEN (drives sizing)":"evidence only"}</div>`;
+    if(r.why)h+=`<div class="pad grid2"><div class="pos"><div class="kv"><b style="color:var(--em)">SUPPORTS ▲</b></div>${r.why.positive.map(s=>`<div class="why-line" style="color:var(--em)">+ ${esc(s)}</div>`).join("")||'<div class="why-line" style="color:var(--t3)">(nothing notable)</div>'}</div>
+      <div class="neg"><div class="kv"><b style="color:var(--rd)">AGAINST ▼</b></div>${r.why.negative.map(s=>`<div class="why-line" style="color:var(--rd)">− ${esc(s)}</div>`).join("")||'<div class="why-line" style="color:var(--t3)">(nothing notable)</div>'}</div></div>`;
+    const z=r.sizing;
+    h+=`<div class="pad"><div class="kv"><b>SIZING</b><span>base → effective ${z.risk_pct.toFixed(2)}%${z.notes.length?" · "+z.notes.map(esc).join(" · "):" (flat — adaptive stages per profile/env)"}</span></div>`;
+    if(z.inputs&&z.inputs.confidence!==undefined)h+=`<div class="kv"><b>EVIDENCE</b><span>conf ${(z.inputs.confidence*100).toFixed(0)}% [P&gt;null ${(z.inputs.p_beats_null*100||0).toFixed(0)}% · P&gt;0 ${(z.inputs.p_positive*100||0).toFixed(0)}%] · n_eff-based sample-q ${(z.inputs.sample_quality||0).toFixed(2)} · σ_R ${(z.inputs.sigma_r||0).toFixed(2)}</span></div>`;
+    if(r.plan)h+=`<div class="kv"><b>PLAN</b><span>risk $${r.plan.risk_actual.toFixed(2)} + $${r.plan.total_cost.toFixed(2)} costs · size ${r.plan.size} · notional $${r.plan.notional.toFixed(0)} · R:R ${r.plan.gross_rr.toFixed(2)} → NET ${r.plan.net_rr.toFixed(2)}${r.plan.liquidation?` · liq ${r.plan.liquidation} (beyond stop ✓)`:""}</span></div>`;
+    h+=`</div>`;
+    $("#an-out").innerHTML=h;
+  }catch(e){$("#an-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* research */
+async function doBacktest(){
+  const sym=$("#bt-sym").value.trim();if(!sym)return;
+  $("#bt-out").innerHTML=`<div class="spin">backtesting ${esc(sym)} — same code as live…</div>`;
+  try{
+    const r=await j("/api/backtest/"+encodeURIComponent(sym));
+    const q=r.quality||{};const qbits=Object.entries(q).filter(([k,v])=>["dropped","gaps","zero_volume","suspect_spikes"].includes(k)&&v);
+    let h=`<div class="pad" style="color:var(--t2);font-family:var(--mono);font-size:11px">${r.n_candles} candles (of ${r.requested} requested)${qbits.length?` · <span style="color:var(--am)">data quality: ${qbits.map(([k,v])=>k.replace("_"," ")+" "+v).join(" · ")} (flagged, never 'fixed')</span>`:""}</div>`;
+    h+=`<table><tr><th>SETUP</th><th>VERDICT</th><th>N</th><th>WIN%</th><th>EXPECTANCY [CI]</th><th>vs NULL [low]</th><th>PF</th><th>MaxDD</th><th>ROBUSTNESS</th></tr>`;
+    const vs={"+EV":"long","-EV":"short"};
+    let i=0;
+    for(const [name,p] of Object.entries(r.setups)){
+      const o=p.overall;const rb=p.robustness;
+      h+=`<tr class="${i++%2?'alt':''}"><td><b>${esc(name)}</b></td><td class="${vs[p.verdict]||''}">${esc(p.verdict)}</td><td>${o.n}</td><td>${(o.win_rate*100).toFixed(0)}%</td><td>${fmtR(o.expectancy)} [${fmtR(o.ci_low)},${fmtR(o.ci_high)}]</td><td>${p.null_n?fmtR(p.edge_vs_null)+" ["+fmtR(p.edge_vs_null_ci_low)+"]":"—"}</td><td>${o.profit_factor===null?"—":(+o.profit_factor).toFixed(2)}</td><td>${o.max_drawdown_r.toFixed(1)}R</td><td style="color:${rb.score>=0.6?'var(--em)':rb.score>=0.3?'var(--am)':'var(--rd)'}">${rb.score.toFixed(2)} ${esc(rb.label)}</td></tr>`;
+    }
+    h+=`</table><div class="foot">survivors-only universe (selection bias) · SEs deff-widened · MC = block bootstrap · single-coin slice — the POOLED verdict is authoritative</div>`;
+    $("#bt-out").innerHTML=h;
+  }catch(e){$("#bt-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* lab */
+async function loadLab(){
+  try{
+    const f=await j("/api/features");
+    const rows=Object.entries(f).sort((a,b)=>b[1].importance-a[1].importance);
+    if(!rows.length){$("#lab-out").innerHTML=`<div class="spin">no importance snapshot — rebuild the cache</div>`;return}
+    const seed=new Set(rows.slice(0,4).map(r=>r[0]));
+    $("#lab-out").innerHTML=`<table><tr><th>FEATURE</th><th>IMPORTANCE</th><th># SIG</th><th>MEAN LIFT</th><th>BEST LOW</th><th>PROVEN</th><th>TREND</th></tr>`+
+      rows.map(([k,v],i)=>`<tr class="${i%2?'alt':''}"><td><b>${esc(k)}${seed.has(k)?" ●":""}</b></td><td><div class="bar" style="width:170px"><i style="width:${Math.min(100,v.importance/6.5*100)}%;background:${seed.has(k)?'var(--em)':'var(--t3)'}"></i></div>${v.importance.toFixed(2)}</td><td>${v.n_significant}</td><td>${fmtR(v.mean_lift)}</td><td>${fmtR(v.best_lift_low)}</td><td>${v.n_proven||0}</td><td style="color:var(--t3)">${esc(v.trend||"—")}</td></tr>`).join("")+
+      `</table><div class="foot">● = top-4, may seed P4 interaction pairs · trend vs previous scan --refresh</div>`;
+  }catch(e){$("#lab-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* positions */
+async function loadPos(){
+  try{
+    const d=await j("/api/positions");
+    if(!d.records.length){$("#pos-out").innerHTML=`<div class="spin">book is empty</div>`;return}
+    $("#pos-out").innerHTML=d.records.map(r=>`<div class="veh" style="margin:0 0 8px"><div class="l1"><b>${esc(r.symbol)}</b><span class="${r.side}">${esc(r.side).toUpperCase()}</span><span>${esc(r.setup)} · ${esc(r.grade)}</span><span class="seal ${r.status==='open'?'em':'am'}">${esc(r.status).toUpperCase()}</span><span style="color:var(--t3)">${esc(r.mode)} · ${esc((r.timestamp||"").slice(0,16))}</span></div><div class="why">entry ${r.entry_planned} · stop ${r.stop_planned} · targets ${(r.targets||[]).join(" · ")} · risk ${r.risk_pct_planned}%${(r.notes||[]).length?" · "+r.notes.map(esc).join(" · "):""}</div></div>`).join("");
+  }catch(e){$("#pos-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* journal */
+async function loadJournal(){
+  try{
+    const d=await j("/api/journal");const s=d.stats;
+    let h=`<div class="statgrid"><div class="stat"><b>${s.n}</b><i>CLOSED</i></div><div class="stat"><b>${(s.win_rate*100).toFixed(0)}%</b><i>WIN RATE</i></div><div class="stat"><b style="color:${s.avg_r>=0?'var(--em)':'var(--rd)'}">${fmtR(s.avg_r)}</b><i>AVG R</i></div><div class="stat"><b style="color:${s.total_r>=0?'var(--em)':'var(--rd)'}">${fmtR(s.total_r)}</b><i>TOTAL R</i></div></div>`;
+    if(d.closed.length)h+=`<table><tr><th>DATE</th><th>SYMBOL</th><th>SETUP</th><th>SIDE</th><th>R</th><th>NOTES</th></tr>`+
+      d.closed.slice().reverse().map((r,i)=>`<tr class="${i%2?'alt':''}"><td>${esc((r.timestamp||"").slice(0,10))}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.setup)}</td><td class="${r.side}">${esc(r.side).toUpperCase()}</td><td style="color:${r.realized_r>=0?'var(--em)':'var(--rd)'}"><b>${fmtR(r.realized_r)}</b></td><td style="color:var(--t3)">${(r.notes||[]).map(esc).join(" · ")}</td></tr>`).join("")+`</table>`;
+    $("#jr-out").innerHTML=h;
+  }catch(e){$("#jr-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+loadStatus();loadBoard();setInterval(loadStatus,60000);
+</script>
+</body>
+</html>

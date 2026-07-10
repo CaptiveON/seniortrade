@@ -1446,6 +1446,18 @@ def cmd_watch(args: argparse.Namespace) -> int:
     return _watch_loop(args, _load_tiered(args), market, spawned=getattr(args, "watch_run", False))
 
 
+def cmd_ui(args: argparse.Namespace) -> int:
+    """UI Phase A: the local read-only cockpit (same engine, second frontend)."""
+    from . import api
+    console.print(Panel(Text(
+        "SENIORTRADE cockpit → http://127.0.0.1:8484\n"
+        "localhost only — keys and data never leave this machine · READ-ONLY (orders stay in the CLI)\n"
+        "Ctrl+C to stop.", style="bold"),
+        title="Web cockpit", border_style="green", title_align="left"))
+    api.main()
+    return 0
+
+
 def cmd_backtest(args: argparse.Namespace) -> int:
     settings = _load_tiered(args)
     market = _market_from_args(args)
@@ -2411,6 +2423,10 @@ def build_parser() -> argparse.ArgumentParser:
     p_scan.add_argument("--hard", action="store_true",
                         help="P4: exhaustive feature-PAIR (interaction) search on rebuild (else greedy)")
     p_scan.set_defaults(func=cmd_scan)
+
+    # ui (local web cockpit — Phase A read-only)
+    p_ui = sub.add_parser("ui", help="local web cockpit at 127.0.0.1:8484 (read-only; orders stay in the CLI)")
+    p_ui.set_defaults(func=cmd_ui)
 
     # features (P13 — continuous feature evaluation)
     p_feat = sub.add_parser("features", help="P13: predictive value of each context feature + rising/decaying trend")
