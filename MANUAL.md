@@ -363,6 +363,37 @@ The SENIORTRADE cockpit in your browser — **the same engine, a second frontend
 
 **Safety contract:** binds to **127.0.0.1 only** (keys/data never leave the machine); **everything is paper** — every record is `mode="dry-run"`; there is **no live route and the live module is never imported** (both structurally tested); real money remains exclusively behind the CLI's `--live` arm flag + `CONFIRM LIVE`. The slow board scan runs server-side in the background — the page polls.
 
+## Universe Studio — YOU choose what to scan
+
+The Board view carries a **UNIVERSE bar**: pick a lens, set its knobs, hit **▶ SCAN THIS UNIVERSE**. A lens only chooses *what* enters the scan — **every honesty gate runs unchanged inside whatever you pick**; a lens can surface a coin, it can never manufacture a verdict for it.
+
+| lens | knobs | what it slices |
+|---|---|---|
+| **Top by volume** | top_n | the classic default (top 100 by 24h quote volume) |
+| **Volume band ($)** | min_usd, max_usd, top_n | mid/low-liquidity slices |
+| **Top 24h movers** | up / down / both, top_n | the biggest % movers right now |
+| **New listings** | days, top_n | USD-M contracts onboarded within N days |
+| **My coins** | comma-separated symbols | your exact list, verbatim (unresolved symbols are *said*, not hidden) |
+| **Market-cap band ($)** | min_usd, max_usd, top_n | e.g. $100M–$1B mid-caps (CoinGecko, cached 24h) |
+
+The minimum-volume floor still applies everywhere (an untradeable coin is a disservice, not freedom) — **except** *My coins*, where your explicit pick is honored and the downstream gates tell the honest story.
+
+## The FULL SPECTRUM board — every candidate, tiered; never a void
+
+Under ALPHA, the spectrum ledger prices **every coin you scanned** — nothing is hidden behind an empty board:
+
+| tier | meaning |
+|---|---|
+| 🟢 **PROVEN ALPHA** | passes the full gate (also on the alpha table) |
+| 🔵 **PROVEN BETA** | the tide's money, alpha-grade rigor on its own hypothesis |
+| 🟡 **NEAR-MISS** | a money-maker within a whisker of the bar — watch it |
+| ⚪ **UNPROVEN** | positive mean, statistically indistinguishable from luck — *the truth most tools hide* |
+| ⚪ **THIN EVIDENCE** | not enough effective sample to say anything either way |
+| 🔴 **PROVEN LOSER** | taking it has a measured, negative price |
+| ⚪ **QUIET** | no setup fired on the current bar — nothing to grade yet |
+
+Every row with enough evidence carries a **Consequence Card** — a Monte-Carlo of *20 trades like this cell* from its measured win rate / avg win / avg loss: **median outcome (in R and your $ at your risk-%), the worst-5% path, P(you end negative), the expected worst losing streak**. The tier is the verdict; the consequence line is the price of ignoring it; the decision stays yours. Tier chips filter the ledger; clicking a row jumps straight into the full Analyze read. The CLI `scan` prints the tier counts (`FULL SPECTRUM: unproven 2 · loser 2 · quiet 1`); the ledger itself lives in the cockpit.
+
 ## Risk profiles & the strictness axis (the cockpit)
 
 ```bash

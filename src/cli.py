@@ -989,7 +989,7 @@ def _render_backtest(symbol, market, tf, profiles, settings, full: bool = False,
 _EDGE_GRADE_STYLE = {"A": "bold green", "B": "green", "C": "yellow", "D": "dim", "F": "dim red"}
 
 
-def _render_board(market, context, opps, watch, settings, beta=None) -> None:
+def _render_board(market, context, opps, watch, settings, beta=None, spectrum=None) -> None:
     console.print(_render_context_banner(context))
     # ── LANE 1: ALPHA — proven TIMING edge (beats matched-geometry random entries) ──
     if not opps:
@@ -1034,6 +1034,12 @@ def _render_board(market, context, opps, watch, settings, beta=None) -> None:
                            "survivors (selection bias) — read as 'edge on currently-liquid names.'", style="dim"))
         if watch:
             console.print(Text(f"Watchlist (no proven edge yet): {', '.join(watch[:12])}", style="dim"))
+    if spectrum:
+        counts = {}
+        for r in spectrum:
+            counts[r["tier"]] = counts.get(r["tier"], 0) + 1
+        console.print(Text("FULL SPECTRUM: " + " · ".join(f"{k} {v}" for k, v in counts.items())
+                           + "  (every candidate tiered — see the web cockpit for the ledger)", style="dim"))
     _render_beta_lane(beta)
     console.print(Panel(Text(DISCLAIMER, style="dim"), border_style="dim"))
 
@@ -1102,13 +1108,13 @@ def cmd_scan(args: argparse.Namespace) -> int:
             def cb(symbol, i, total):
                 progress.update(task, description=f"Edge-scoring {symbol} ({i}/{total})")
 
-            context, opps, watch, beta = run_scan(market, settings, top=args.top,
+            context, opps, watch, beta, spectrum = run_scan(market, settings, top=args.top,
                                             refresh=args.refresh, progress=cb,
                                             hard=getattr(args, "hard", False))
     except DataError as exc:
         console.print(_data_error_panel(exc))
         return 1
-    _render_board(market, context, opps, watch, settings, beta=beta)
+    _render_board(market, context, opps, watch, settings, beta=beta, spectrum=spectrum)
     return 0
 
 
@@ -1357,7 +1363,7 @@ def _watch_loop(args, settings, market: Market, spawned: bool = False) -> int:
                         def _cb(sym, i, total):
                             progress.update(task, description=f"Edge-scoring {sym} ({i}/{total})")
 
-                        context, opps, watch, beta = run_scan(market, settings, top=args.top, progress=_cb)
+                        context, opps, watch, beta, _spec = run_scan(market, settings, top=args.top, progress=_cb)
                 except DataError as exc:
                     console.print(_data_error_panel(exc))
                     next_board = time.time() + price_poll       # retry shortly on a fetch error
@@ -2302,7 +2308,7 @@ def cmd_roar(args: argparse.Namespace) -> int:
     try:
         with _progress() as p:
             p.add_task("Scanning for proven edge…", total=None)
-            ctx, opportunities, watchlist, _beta = run_scan(market, settings, refresh=getattr(args, "refresh", False))
+            ctx, opportunities, watchlist, _beta, _spec = run_scan(market, settings, refresh=getattr(args, "refresh", False))
     except DataError as exc:
         console.print(_data_error_panel(exc))
         return 1

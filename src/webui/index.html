@@ -109,18 +109,26 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
   </nav>
   <main>
     <section id="v-board">
+      <div class="panel"><div class="ph"><h2>UNIVERSE</h2><span class="sub">you choose WHAT to scan — the gates decide what's true inside it</span>
+        <select id="uv-kind" style="background:var(--bg);border:1px solid var(--ln);border-radius:8px;color:var(--tx);font-family:var(--mono);font-size:11px;padding:7px 10px"></select>
+        <span id="uv-params" style="display:flex;gap:6px"></span>
+        <button class="btn em" onclick="rescan(false)">▶ SCAN THIS UNIVERSE</button>
+        <button class="btn t2" onclick="rescan(true)" title="scan --refresh">⟳ REBUILD CACHE</button>
+        <span class="sp"></span><span id="uv-active" style="font-family:var(--mono);font-size:9.5px;color:var(--cy)"></span></div>
+      </div>
       <div class="panel">
         <div class="ph"><h2 class="em">ALPHA</h2><span class="sub">proven timing edge — beats matched random entries at sig 1.65</span><span class="sp"></span>
-          <span id="alpha-seal" class="seal am">—</span>
-          <button class="btn t2" onclick="rescan(false)">⟳ RESCAN</button>
-          <button class="btn em" onclick="rescan(true)" title="scan --refresh">⟳ REBUILD CACHE</button></div>
+          <span id="alpha-seal" class="seal am">—</span></div>
         <div id="alpha-body"><div class="spin">no scan yet — press RESCAN</div></div>
       </div>
       <div class="panel cyb">
         <div class="ph"><h2 class="cyt">BETA</h2><span class="sub">proven market posture — tide + vehicle each proven at sig 1.65 · timing alpha NOT claimed</span><span class="sp"></span><span id="beta-seal" class="seal am">—</span></div>
         <div id="beta-body"><div class="spin">—</div></div>
       </div>
-      <div class="panel"><div class="ph"><h2>WATCHLIST</h2><span class="sub">live setups, no proven edge yet</span></div><div class="wl" id="watchlist"></div></div>
+      <div class="panel"><div class="ph"><h2>FULL SPECTRUM</h2><span class="sub">every candidate, tiered — the truth about all of them; you decide</span><span class="sp"></span><span id="spec-counts" style="font-family:var(--mono);font-size:9px;color:var(--t3)"></span></div>
+        <div class="pad" id="spec-filters" style="padding-top:0"></div>
+        <div id="spectrum"><div class="spin">scan to populate</div></div>
+      </div>
     </section>
 
     <section id="v-analyze" class="hide">
@@ -190,7 +198,7 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
 /* topbar */
 async function loadStatus(){
   try{
-    const s=await j("/api/status");
+    const s=await j("/api/status");window._status=s;
     const c=[];
     c.push(`<span class="chip t2">${esc(s.tier)} · SWING</span>`);
     if(s.profile)c.push(`<span class="chip ${['L2','L3'].includes(s.profile)?'am':'em'}">PROFILE ${esc(s.profile)} ${esc(s.profile_label)}</span>`);
@@ -201,6 +209,31 @@ async function loadStatus(){
     c.push(`<span class="chip em">$${(+s.equity).toLocaleString()}</span>`);
     $("#chips").innerHTML=c.join("");
   }catch(e){$("#chips").innerHTML=`<span class="chip rd">API offline</span>`}
+}
+
+/* universe studio */
+let UV={kind:"top_volume",params:{}};let UVCAT=null;
+async function loadUniverse(){
+  UVCAT=await j("/api/universe");
+  $("#uv-kind").innerHTML=UVCAT.lenses.map(l=>`<option value="${l.kind}">${esc(l.label)}</option>`).join("");
+  $("#uv-kind").onchange=renderUvParams;renderUvParams();
+}
+function renderUvParams(){
+  const kind=$("#uv-kind").value;const lens=UVCAT.lenses.find(l=>l.kind===kind);
+  $("#uv-params").innerHTML=(lens.params||[]).map(pr=>{
+    if(pr.type==="choice")return `<select data-p="${pr.name}" style="background:var(--bg);border:1px solid var(--ln);border-radius:8px;color:var(--tx);font-family:var(--mono);font-size:10px;padding:6px 8px">${pr.choices.map(c=>`<option>${c}</option>`).join("")}</select>`;
+    if(pr.type==="list")return `<input data-p="${pr.name}" type="text" placeholder="BTC/USDT:USDT, SOL/USDT:USDT, …" style="width:340px">`;
+    return `<input data-p="${pr.name}" type="text" value="${pr.default??""}" placeholder="${pr.name}" style="width:110px" title="${pr.name}">`;
+  }).join("");
+}
+function uvLens(){
+  const kind=$("#uv-kind").value;const out={kind};
+  document.querySelectorAll("#uv-params [data-p]").forEach(el=>{
+    const v=el.value.trim();if(!v)return;
+    out[el.dataset.p]=el.dataset.p==="symbols"?v.split(",").map(x=>x.trim()).filter(Boolean):
+      (el.tagName==="SELECT"||isNaN(+v)?v:+v);
+  });
+  return out;
 }
 
 /* board */
@@ -243,10 +276,13 @@ async function loadBoard(){
     h+=`<div class="warn">⚠ PROVEN BETA ≠ ALPHA: profits ride WITH the trend · stage labels these discretionary · roar never strikes them · validated: 0 qualifying cells on pure noise</div>`;
     $("#beta-body").innerHTML=h;
   }
-  $("#watchlist").innerHTML=(b.watchlist||[]).map(s=>`<span>${esc(s.split("/")[0])}</span>`).join("")||'<span>—</span>';
+  if(b.universe)$("#uv-active").textContent="active: "+(b.universe.kind||"top_volume");
+  renderSpectrum(b.spectrum||[]);
 }
 async function rescan(refresh){
-  await fetch("/api/board/refresh"+(refresh?"?refresh=true":""),{method:"POST"});
+  const r=await fetch("/api/board/refresh"+(refresh?"?refresh=true":""),{method:"POST",
+    headers:{"Content-Type":"application/json"},body:JSON.stringify({universe:uvLens()})});
+  if(r.status===422){const d=await r.json();alert(d.detail);return}
   loadBoard();
 }
 
@@ -334,6 +370,38 @@ async function loadJournal(){
       d.closed.slice().reverse().map((r,i)=>`<tr class="${i%2?'alt':''}"><td>${esc((r.timestamp||"").slice(0,10))}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.setup)}</td><td class="${r.side}">${esc(r.side).toUpperCase()}</td><td style="color:${r.realized_r>=0?'var(--em)':'var(--rd)'}"><b>${fmtR(r.realized_r)}</b></td><td style="color:var(--t3)">${(r.notes||[]).map(esc).join(" · ")}</td></tr>`).join("")+`</table>`;
     $("#jr-out").innerHTML=h;
   }catch(e){$("#jr-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* -------- FULL SPECTRUM (the commercial heart: every edge, honestly priced) -------- */
+const TIERS={alpha:["PROVEN ALPHA","em"],beta:["PROVEN BETA","cy"],near:["NEAR-MISS","am"],
+             unproven:["UNPROVEN","t2"],thin:["THIN EVIDENCE","t2"],loser:["PROVEN LOSER","rd"],
+             quiet:["QUIET","t2"]};
+let SPEC=[],SPECFILTER="all";
+function renderSpectrum(rows){
+  SPEC=rows;
+  const counts={};rows.forEach(r=>counts[r.tier]=(counts[r.tier]||0)+1);
+  $("#spec-counts").textContent=Object.entries(counts).map(([k,v])=>`${k} ${v}`).join(" · ");
+  $("#spec-filters").innerHTML=["all",...Object.keys(TIERS)].map(t=>
+    `<button class="btn ${SPECFILTER===t?'em':'t2'}" style="padding:4px 10px;font-size:9px;margin-right:6px" onclick="SPECFILTER='${t}';renderSpectrum(SPEC)">${t.toUpperCase()}${t!=='all'&&counts[t]?` (${counts[t]})`:""}</button>`).join("");
+  const show=rows.filter(r=>SPECFILTER==="all"||r.tier===SPECFILTER);
+  if(!show.length){$("#spectrum").innerHTML=`<div class="spin">nothing in this tier</div>`;return}
+  const st=window._status||{};const riskAmt=(st.equity||1000)*(st.risk_pct||1)/100;
+  $("#spectrum").innerHTML=show.map(r=>{
+    const t=TIERS[r.tier]||["?","t2"];
+    const cq=r.consequence;
+    const cqTxt=cq?`20 trades like this → median <b style="color:${cq.median_r>=0?'var(--em)':'var(--rd)'}">${fmtR(cq.median_r)} ($${(cq.median_r*riskAmt).toFixed(0)})</b> · worst-5% ${fmtR(cq.p5_r)} · P(down) ${(cq.p_negative*100).toFixed(0)}% · streak ~${cq.exp_worst_streak.toFixed(1)}`:(r.tier==="quiet"?"":"not enough evidence to simulate");
+    return `<div class="veh" style="cursor:pointer" onclick="specGo('${esc(r.symbol)}')">
+      <div class="l1"><span class="seal ${t[1]}">${t[0]}</span><b>${esc(r.symbol)}</b>
+      <span class="${r.side||""}">${esc((r.side||"").toUpperCase())}</span><span>${esc(r.setup)}${r.context_label?" ·"+esc(r.context_label):""}${r.grade?" · "+esc(r.grade):""}</span>
+      <span style="color:var(--t2)">cell ${r.exp!==null&&r.exp!==undefined?fmtR(r.exp):"—"} · after-null ${r.edge!==null&&r.edge!==undefined?fmtR(r.edge):"—"} · n_eff ${Math.round(r.n_eff||0)}</span>
+      <span class="sp" style="flex:1"></span><span style="color:var(--t3);font-size:9px">${esc(r.regime||"")}</span></div>
+      <div class="why">${esc(r.reason||"")}</div>
+      <div class="why" style="color:var(--t2)">${cqTxt}</div></div>`;
+  }).join("")+`<div class="foot">the tier is the verdict · the consequence line is the price of ignoring it · click a row for the full read — your decision, informed</div>`;
+}
+function specGo(sym){
+  document.querySelector('[data-v="analyze"]').click();
+  $("#an-sym").value=sym;doAnalyze();
 }
 
 /* -------- Phase B: typed-CONFIRM modal -------- */
@@ -435,7 +503,7 @@ async function previewProfile(name){
   }catch(e){$("#ck-out").innerHTML+=`<div class="err">${esc(e.message)}</div>`}
 }
 
-loadStatus();loadBoard();setInterval(loadStatus,60000);
+loadStatus();loadBoard();loadUniverse();setInterval(loadStatus,60000);
 </script>
 </body>
 </html>

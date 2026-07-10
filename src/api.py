@@ -62,10 +62,10 @@ def _market(name: str | None) -> Market:
     return Market.SPOT if (name or "").lower() == "spot" else Market.USDM
 
 
-def _scan_worker(market: Market, refresh: bool) -> None:
+def _scan_worker(market: Market, refresh: bool, universe: dict | None = None) -> None:
     try:
         s = _settings()
-        context, opps, watch, beta = es.scan(market, s, refresh=refresh)
+        context, opps, watch, beta, spectrum = es.scan(market, s, refresh=refresh, universe=universe)
         with _LOCK:
             _STATE["board"] = {
                 "posture": getattr(context, "posture", None),
@@ -73,6 +73,8 @@ def _scan_worker(market: Market, refresh: bool) -> None:
                 "alpha": [asdict(o) for o in opps],
                 "beta": beta,
                 "watchlist": watch,
+                "spectrum": spectrum,
+                "universe": (universe or {"kind": "top_volume"}),
                 "market": market.value,
             }
             _STATE["board_ts"] = time.time()
@@ -127,14 +129,41 @@ def board():
 
 
 @app.post("/api/board/refresh")
-def board_refresh(market: str | None = None, refresh: bool = False):
+def board_refresh(market: str | None = None, refresh: bool = False, body: dict | None = None):
+    universe = (body or {}).get("universe")
+    if universe:
+        from . import universe as uv
+        if universe.get("kind") not in uv.LENSES:
+            raise HTTPException(status_code=422, detail=f"unknown lens — choose from {uv.LENSES}")
     with _LOCK:
         if _STATE["scanning"]:
             return JSONResponse({"started": False, "reason": "scan already running"}, status_code=409)
         _STATE["scanning"] = True
-    t = threading.Thread(target=_scan_worker, args=(_market(market), refresh), daemon=True)
+    t = threading.Thread(target=_scan_worker, args=(_market(market), refresh, universe), daemon=True)
     t.start()
-    return {"started": True}
+    return {"started": True, "universe": universe or {"kind": "top_volume"}}
+
+
+@app.get("/api/universe")
+def universe_options():
+    from . import universe as uv
+    return {"lenses": [
+        {"kind": "top_volume", "label": "Top by volume", "params": [{"name": "top_n", "type": "int", "default": 100}]},
+        {"kind": "volume_band", "label": "Volume band ($)", "params": [
+            {"name": "min_usd", "type": "float", "default": 5_000_000},
+            {"name": "max_usd", "type": "float", "default": 50_000_000},
+            {"name": "top_n", "type": "int", "default": 100}]},
+        {"kind": "movers", "label": "Top 24h movers", "params": [
+            {"name": "direction", "type": "choice", "choices": ["both", "up", "down"], "default": "both"},
+            {"name": "top_n", "type": "int", "default": 50}]},
+        {"kind": "new_listings", "label": "New listings", "params": [
+            {"name": "days", "type": "int", "default": 30}, {"name": "top_n", "type": "int", "default": 50}]},
+        {"kind": "custom", "label": "My coins", "params": [{"name": "symbols", "type": "list"}]},
+        {"kind": "mcap_band", "label": "Market-cap band ($)", "params": [
+            {"name": "min_usd", "type": "float", "default": 100_000_000},
+            {"name": "max_usd", "type": "float", "default": 1_000_000_000},
+            {"name": "top_n", "type": "int", "default": 100}]},
+    ], "note": "a lens picks WHAT to scan; every honesty gate runs unchanged inside it"}
 
 
 @app.get("/api/analyze/{symbol:path}")

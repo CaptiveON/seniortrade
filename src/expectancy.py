@@ -273,6 +273,33 @@ def monte_carlo(rs, runs: int, ruin_drawdown_r: float, seed: int = 0, block: int
     )
 
 
+def consequence(win_rate: float, avg_win_r: float, avg_loss_r: float,
+                n_trades: int = 20, sims: int = 2000, seed: int = 0) -> dict:
+    """THE CONSEQUENCE CARD — what taking N trades LIKE THIS CELL does, simulated from its
+    measured stats (win rate, avg win, avg loss). Bernoulli wins/losses; honest about
+    dispersion, silent about nothing: median & 5th-percentile total R, P(you end negative),
+    and the expected worst losing streak. Display converts R → $ at the user's risk%."""
+    wr = min(1.0, max(0.0, float(win_rate or 0.0)))
+    aw = float(avg_win_r or 0.0)
+    al = -abs(float(avg_loss_r or 0.0))
+    rng = np.random.default_rng(seed)
+    wins = rng.random((sims, n_trades)) < wr
+    rs = np.where(wins, aw, al)
+    totals = rs.sum(axis=1)
+    # worst losing streak per sim
+    streaks = np.zeros(sims)
+    run = np.zeros(sims)
+    for j in range(n_trades):
+        run = np.where(wins[:, j], 0.0, run + 1.0)
+        streaks = np.maximum(streaks, run)
+    return {"n_trades": n_trades,
+            "median_r": float(np.median(totals)),
+            "p5_r": float(np.percentile(totals, 5)),
+            "p95_r": float(np.percentile(totals, 95)),
+            "p_negative": float(np.mean(totals < 0)),
+            "exp_worst_streak": float(np.mean(streaks))}
+
+
 def fold_expectancies(rs, k: int) -> list[float]:
     arr = np.asarray(rs, dtype=float)
     if len(arr) == 0:

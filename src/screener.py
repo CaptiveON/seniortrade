@@ -319,6 +319,7 @@ def run_screen(
     api_key: str | None = None,
     api_secret: str | None = None,
     progress: ProgressCb | None = None,
+    universe_lens: dict | None = None,
 ) -> ScreenResult:
     """Execute the full screen against real Binance data and return a ranking."""
     ex = dfetch.make_exchange(market, api_key, api_secret)
@@ -347,7 +348,12 @@ def run_screen(
     btc_close = anchor_closes.get(btc_sym)
 
     universe = eligible_symbols(ex, cfg, market)
-    volume_kept, vol_rejected = _rank_by_volume(tickers, universe, cfg)
+    if universe_lens:                                  # Universe Studio: the USER picks the
+        from . import universe as uv                       # slice; every gate below is unchanged
+        volume_kept, _note = uv.select(ex, tickers, universe, cfg, universe_lens, market)
+        vol_rejected = max(0, len(universe) - len(volume_kept))
+    else:
+        volume_kept, vol_rejected = _rank_by_volume(tickers, universe, cfg)
 
     # concurrent OHLCV prefetch (thread pool) — the screener's main latency cost
     ohlcv_cache: dict[str, pd.DataFrame] = {}

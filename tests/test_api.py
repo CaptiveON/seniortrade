@@ -33,8 +33,9 @@ def test_board_refresh_runs_scan_in_background(monkeypatch):
     fake_beta = {"posture": "risk-off", "tide_regime": "down",
                  "drift": {"proven": False, "mean": -0.1, "lower": -0.15, "n": 100, "cells": 3},
                  "candidates": [], "near_misses": []}
-    def fake_scan(market, settings, top=None, refresh=False, progress=None, hard=False):
-        return ctx, [], ["ETH/USDT:USDT"], fake_beta
+    def fake_scan(market, settings, top=None, refresh=False, progress=None, hard=False,
+                  universe=None):
+        return ctx, [], ["ETH/USDT:USDT"], fake_beta, []
     monkeypatch.setattr(api.es, "scan", fake_scan)
     with api._LOCK:                                       # reset server state
         api._STATE.update({"board": None, "board_ts": 0.0, "scanning": False, "error": None})

@@ -878,6 +878,47 @@ def tide_drift(profiles: dict, tide_regime: str, cfg: EdgeScoreConfig) -> dict:
             "proven": bool(lower > 0)}
 
 
+TIER_ORDER = ("alpha", "beta", "near", "unproven", "thin", "loser", "quiet")
+
+
+def spectrum_row(profile: dict, setup: str, side: str, regime: str, symbol: str,
+                 context: dict | None, cfg: EdgeScoreConfig) -> dict:
+    """FULL SPECTRUM: one honest row for ANY live candidate — never a void. Tier:
+      alpha    — passes the full gate (also on the alpha board)
+      near     — money-maker within 0.03R of the floor / significance whisker (watch it)
+      unproven — positive mean, indistinguishable from luck (the truth most tools hide)
+      thin     — not enough EFFECTIVE evidence to say anything
+      loser    — proven money-loser: taking it has a measured, negative price
+    Carries the cell stats the Consequence Card simulates from."""
+    reg = _context_cell_reg(profile, regime, context, cfg.sig_z) or _shrunk_reg(profile, symbol, regime)
+    base = {"symbol": symbol, "setup": setup, "side": side, "regime": regime,
+            "exp": None, "edge": None, "n_eff": 0, "tier": "thin",
+            "reason": "no pooled history for this setup×regime yet",
+            "win_rate": None, "avg_win_r": None, "avg_loss_r": None}
+    if not reg:
+        return base
+    ne = _n_eff(reg)
+    exp = float(reg["expectancy"])
+    base.update(exp=exp, n_eff=ne, win_rate=reg.get("win_rate"),
+                avg_win_r=reg.get("avg_win_r"), avg_loss_r=reg.get("avg_loss_r"),
+                context_label=reg.get("context_label"))
+    if ne < cfg.min_regime_n:
+        base["reason"] = f"only ~{ne:.0f} effective trades — not enough evidence either way"
+        return base
+    ok, edge, reason = null_adjusted_edge(reg, (profile.get("null_by_regime") or {}).get(regime), cfg)
+    base.update(edge=float(edge), reason=reason)
+    if exp <= 0:
+        base["tier"] = "loser"
+        return base
+    if ok:
+        base["tier"] = "alpha"
+        return base
+    near_floor = (0.0 < edge <= cfg.floor and (cfg.floor - edge) <= 0.03)
+    near_sig = (-0.05 < edge <= 0.0)
+    base["tier"] = "near" if (near_floor or near_sig) else "unproven"
+    return base
+
+
 def beta_candidate(profile: dict, setup: str, side: str, regime: str, symbol: str,
                    context: dict | None, posture: str, cfg: EdgeScoreConfig) -> dict | None:
     """PROVEN-BETA gate #2 — a live WITH-TIDE vehicle held to ALPHA-GRADE rigor on ITS OWN
@@ -970,12 +1011,13 @@ def _analyze_many(market: Market, symbols, settings, tf, workers: int, progress=
 
 
 def scan(market: Market, settings, top: int | None = None, refresh: bool = False,
-         progress=None, hard: bool = False) -> tuple:
+         progress=None, hard: bool = False, universe: dict | None = None) -> tuple:
     """Returns (market_context, [Opportunity ranked], [watchlist symbols]). `hard` = exhaustive
     P4 interaction (pair) search on rebuild (else greedy)."""
     cfg = settings.edge
     tf = cfg.tf
-    result = scr.run_screen(market, settings.screener, settings.api_key, settings.api_secret)
+    result = scr.run_screen(market, settings.screener, settings.api_key, settings.api_secret,
+                            universe_lens=universe)
     # POOLED universe edge profile (built once across the liquid survivors, cached) —
     # the verdict each coin's live setup is scored against.
     pool_syms = [c.symbol for c in result.candidates][: cfg.pool_coins]
@@ -989,10 +1031,18 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
     opportunities: list[Opportunity] = []
     watchlist: list[str] = []
     beta_cands: list[dict] = []
+    spectrum: list[dict] = []
     for c in survivors:
         ar = analyses.get(c.symbol)
         if ar is None or not ar.setups or ar.structure is None or ar.structure.state is None:
             watchlist.append(c.symbol)
+            # never a void: a scanned coin with nothing firing is SAID, not dropped
+            spectrum.append({"symbol": c.symbol, "setup": None, "side": None,
+                             "regime": None, "exp": None, "edge": None, "n_eff": 0,
+                             "tier": "quiet", "win_rate": None, "avg_win_r": None,
+                             "avg_loss_r": None,
+                             "reason": "no setup triggered on the current bar — "
+                                       "nothing to grade yet; it stays on watch"})
             continue
         regime = ar.structure.state.trend
         best = None
@@ -1014,6 +1064,15 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
                                     ctx, ar.posture, cfg)
                 if bc and (coin_beta is None or bc["exp"] > coin_beta["exp"]):
                     coin_beta = bc
+        top_sig = ar.setups[0]
+        srow = spectrum_row(profiles.get(top_sig.setup) or {}, top_sig.setup, top_sig.direction,
+                            regime, c.symbol, resolve_context(ar.context, top_sig.direction), cfg)
+        srow["grade"] = top_sig.grade
+        srow["fresh"] = ar.freshness
+        if coin_beta:
+            srow["tier"] = "beta"
+            srow["reason"] = coin_beta["alpha_gap"]
+        spectrum.append(srow)
         if best is None:
             watchlist.append(c.symbol)
             if coin_beta:
@@ -1040,6 +1099,19 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
         cands = sorted(beta_cands, key=lambda d: -d["lower"])[:3] if drift["proven"] else []
         beta = {"posture": posture, "tide_regime": tide_regime, "drift": drift,
                 "candidates": cands, "near_misses": near_misses(profiles, cfg)}
+    # FULL SPECTRUM: every candidate tiered + its consequence simulation — never a void.
+    for row in spectrum:
+        if row.get("win_rate") is not None and row.get("n_eff", 0) >= cfg.min_regime_n:
+            row["consequence"] = ex.consequence(row["win_rate"], row["avg_win_r"], row["avg_loss_r"])
+        else:
+            row["consequence"] = None
+    for o in opportunities:                              # proven rows carry the alpha tier
+        for row in spectrum:
+            if row["symbol"] == o.symbol:
+                row["tier"] = "alpha"
+    _torder = {t: i for i, t in enumerate(TIER_ORDER)}
+    spectrum.sort(key=lambda r: (_torder.get(r["tier"], 9), -(r.get("edge") or r.get("exp") or -9)))
+
     try:                                             # A3: persist the 30-day OI/L-S window —
         from . import derivs as dv                   # every scan grows the local history
         from . import data_fetch as _df
@@ -1048,4 +1120,4 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
         dv.collect_snapshots(_ex, market, pool_syms, period=tf)
     except Exception:                                # collection must never break the board
         pass
-    return result.context, opportunities, watchlist, beta
+    return result.context, opportunities, watchlist, beta, spectrum
