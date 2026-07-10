@@ -173,3 +173,12 @@ def test_profile_switch_full_rail_and_scope():
         assert r2.status_code == 200 and c.get("/api/status").json()["profile"] is None
     finally:
         os.environ.pop("RISK_PROFILE", None)
+
+
+def test_webui_modal_hide_rule_and_no_inline_json_injection():
+    # regression: `.overlay` was defined AFTER `.hide` (equal specificity → later wins),
+    # so the confirm modal rendered from page load and could never be closed.
+    html = api._WEBUI.read_text()
+    assert ".overlay.hide{display:none}" in html
+    # arbitrary server strings must never be interpolated into inline onclick attributes
+    assert "onclick='proposeApply(${JSON.stringify" not in html

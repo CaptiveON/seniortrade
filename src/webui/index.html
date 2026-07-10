@@ -80,6 +80,7 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
 .stat b{display:block;font-family:var(--mono);font-size:16px}.stat i{font-style:normal;color:var(--t3);font-family:var(--mono);font-size:8px;letter-spacing:.08em}
 .hide{display:none}
 .overlay{position:fixed;inset:0;background:rgba(4,6,10,.75);display:flex;align-items:center;justify-content:center;z-index:50}
+.overlay.hide{display:none}
 .modal{background:var(--s1);border:1px solid var(--ln);border-radius:14px;width:480px;max-width:92vw;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
 .modal h3{font-family:var(--mono);font-size:13px;letter-spacing:.06em;margin-bottom:10px}
 .modal .rows{margin-bottom:10px}
@@ -385,14 +386,17 @@ async function checkBook(){
     const act={cancel:["CANCEL STALE","am"],open:["PAPER-FILL → OPEN","em"],outcome:["RECORD COMPLETED OUTCOME","rd"],close:["CLOSE BY PLAN","em"],scale:["TP1 SCALE-OUT","em"],trail:["TRAIL STOP","em"]};
     $("#pos-out").innerHTML=d.proposals.map(r=>{
       const a=act[r.kind];
+      if(a&&r.token)_props[r.token]={label:a[0],sym:r.symbol,detail:r.detail||""};
       return `<div class="veh" style="margin:0 0 8px"><div class="l1"><b>${esc(r.symbol)}</b><span class="${r.side}">${esc(r.side).toUpperCase()}</span><span>${esc(r.setup)}</span><span class="seal ${r.status==='open'?'em':'am'}">${esc(r.status).toUpperCase()}</span>${r.unrealized_r!==undefined?`<span style="color:${r.unrealized_r>=0?'var(--em)':'var(--rd)'}">${fmtR(r.unrealized_r)}</span>`:""}<span style="color:var(--t3)">last ${r.last??"—"}</span></div>
       <div class="why">entry ${r.entry} · stop ${r.stop} · ${esc(r.detail||"")}</div>
-      ${a&&r.token?`<div style="margin-top:6px"><button class="btn ${a[1]}" onclick='proposeApply(${JSON.stringify(r.token)},${JSON.stringify(a[0])},${JSON.stringify(r.symbol)},${JSON.stringify(r.detail||"")})'>${a[0]} …</button></div>`:""}</div>`;
+      ${a&&r.token?`<div style="margin-top:6px"><button class="btn ${a[1]}" onclick="proposeApply('${r.token}')">${a[0]} …</button></div>`:""}</div>`;
     }).join("");
   }catch(e){$("#pos-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
 }
-function proposeApply(token,label,sym,detail){
-  openConfirm(label+" — DRY RUN",kv("SYMBOL",esc(sym))+kv("PROPOSAL",esc(detail)),token,"/api/manage/confirm",()=>checkBook());
+const _props={};
+function proposeApply(token){
+  const p=_props[token]||{};
+  openConfirm((p.label||"APPLY")+" — DRY RUN",kv("SYMBOL",esc(p.sym||""))+kv("PROPOSAL",esc(p.detail||"")),token,"/api/manage/confirm",()=>checkBook());
 }
 
 /* -------- Phase C: Risk Cockpit -------- */
