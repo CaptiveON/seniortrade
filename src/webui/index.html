@@ -79,6 +79,14 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
 .stat{flex:1;background:var(--s2);border:1px solid var(--ln);border-radius:10px;padding:10px 14px}
 .stat b{display:block;font-family:var(--mono);font-size:16px}.stat i{font-style:normal;color:var(--t3);font-family:var(--mono);font-size:8px;letter-spacing:.08em}
 .hide{display:none}
+.overlay{position:fixed;inset:0;background:rgba(4,6,10,.75);display:flex;align-items:center;justify-content:center;z-index:50}
+.modal{background:var(--s1);border:1px solid var(--ln);border-radius:14px;width:480px;max-width:92vw;padding:18px;box-shadow:0 12px 40px rgba(0,0,0,.5)}
+.modal h3{font-family:var(--mono);font-size:13px;letter-spacing:.06em;margin-bottom:10px}
+.modal .rows{margin-bottom:10px}
+.typed{display:flex;gap:8px;align-items:center;margin:10px 0}
+.typed input{flex:1;background:var(--bg);border:1.5px solid rgba(46,230,168,.7);border-radius:8px;color:var(--em);font-family:var(--mono);font-weight:700;font-size:13px;letter-spacing:.06em;padding:9px 12px;width:auto}
+.mbtns{display:flex;gap:8px;justify-content:flex-end}
+.note-ok{color:var(--em);font-family:var(--mono);font-size:10px}.note-bad{color:var(--rd);font-family:var(--mono);font-size:10px}
 </style>
 </head>
 <body>
@@ -118,6 +126,7 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
         <h2>◭ ANALYZE</h2>
         <input type="text" id="an-sym" placeholder="PUMP/USDT:USDT" value="">
         <button class="btn em" onclick="doAnalyze()">RUN</button>
+        <button class="btn t2" onclick="stagePreview()">▶ STAGE (DRY-RUN)</button><span id="an-stage-msg"></span>
         <span class="sub">a READ, not a prediction — six lenses · setups · plan · proofs</span></div>
         <div id="an-out"><div class="spin">enter a symbol</div></div>
       </div>
@@ -139,7 +148,7 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
     </section>
 
     <section id="v-positions" class="hide">
-      <div class="panel"><div class="ph"><h2>❖ POSITIONS</h2><span class="sub">the paper/live book — manage & confirm actions via CLI (Phase B brings them here)</span></div>
+      <div class="panel"><div class="ph"><h2>❖ POSITIONS</h2><span class="sub">the paper book — proposals computed on fresh data; every action needs the typed CONFIRM</span><span class="sp"></span><button class="btn em" onclick="checkBook()">⟳ CHECK BOOK</button></div>
         <div id="pos-out" class="pad"><div class="spin">loading…</div></div></div>
     </section>
 
@@ -149,6 +158,15 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
     </section>
   </main>
 </div>
+<div id="modal" class="overlay hide"><div class="modal">
+  <h3 id="m-title">CONFIRM</h3>
+  <div class="rows" id="m-rows"></div>
+  <div style="color:var(--t3);font-size:9.5px">type the phrase to proceed — dry-run only; NO order is sent to any exchange:</div>
+  <div class="typed"><input id="m-input" type="text" placeholder="CONFIRM" autocomplete="off"></div>
+  <div id="m-msg"></div>
+  <div class="mbtns"><button class="btn t2" onclick="closeModal()">ABORT</button>
+  <button class="btn em" id="m-go" disabled onclick="modalGo()">CONFIRM (disabled until typed)</button></div>
+</div></div>
 <script>
 const $=q=>document.querySelector(q);
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
@@ -310,6 +328,66 @@ async function loadJournal(){
       d.closed.slice().reverse().map((r,i)=>`<tr class="${i%2?'alt':''}"><td>${esc((r.timestamp||"").slice(0,10))}</td><td><b>${esc(r.symbol)}</b></td><td>${esc(r.setup)}</td><td class="${r.side}">${esc(r.side).toUpperCase()}</td><td style="color:${r.realized_r>=0?'var(--em)':'var(--rd)'}"><b>${fmtR(r.realized_r)}</b></td><td style="color:var(--t3)">${(r.notes||[]).map(esc).join(" · ")}</td></tr>`).join("")+`</table>`;
     $("#jr-out").innerHTML=h;
   }catch(e){$("#jr-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+
+/* -------- Phase B: typed-CONFIRM modal -------- */
+let _modal={token:null,endpoint:null,onDone:null};
+function openConfirm(title,rowsHtml,token,endpoint,onDone){
+  _modal={token,endpoint,onDone};
+  $("#m-title").textContent=title;$("#m-rows").innerHTML=rowsHtml;
+  $("#m-input").value="";$("#m-msg").innerHTML="";$("#m-go").disabled=true;
+  $("#modal").classList.remove("hide");$("#m-input").focus();
+}
+function closeModal(){$("#modal").classList.add("hide")}
+$("#m-input").addEventListener("input",e=>{$("#m-go").disabled=e.target.value.trim()!=="CONFIRM"});
+async function modalGo(){
+  try{
+    const r=await fetch(_modal.endpoint,{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({token:_modal.token,phrase:$("#m-input").value.trim()})});
+    const d=await r.json();
+    if(!r.ok)throw new Error(d.detail||r.status);
+    $("#m-msg").innerHTML=`<div class="note-ok">✓ ${esc(d.note||("applied: "+(d.applied||"ok")))} · id ${esc(d.id||"")}</div>`;
+    setTimeout(()=>{closeModal();if(_modal.onDone)_modal.onDone()},900);
+  }catch(e){$("#m-msg").innerHTML=`<div class="note-bad">✗ ${esc(e.message)}</div>`}
+}
+const kv=(k,v)=>`<div class="kv"><b>${esc(k)}</b><span>${v}</span></div>`;
+
+/* stage from Analyze */
+async function stagePreview(){
+  const sym=$("#an-sym").value.trim();if(!sym)return;
+  $("#an-stage-msg").innerHTML=`<span class="note-ok">running the checklist…</span>`;
+  try{
+    const d=await j("/api/stage/preview",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({symbol:sym})});
+    const t=d.ticket;
+    $("#an-stage-msg").innerHTML="";
+    openConfirm("STAGE — DRY RUN",
+      kv("SETUP",`${esc(t.setup)} <span class="${t.side}">${esc(t.side).toUpperCase()}</span> · ${esc(t.grade)}${t.profile?" · profile "+esc(t.profile):""}`)+
+      kv("GUARDS",`<span style="color:var(--em)">${esc(t.guards)}</span>`)+
+      kv("EDGE",`<span style="color:${t.edge.level==='proven'?'var(--em)':'var(--am)'}">${esc(t.edge.level)} — ${esc(t.edge.msg)}</span>`)+
+      kv("RE-FETCH",esc(t.refetch))+
+      kv("TICKET",`${esc(t.entry_type)} entry ${t.entry} · stop ${t.stop} · targets ${t.targets.join(" · ")}`)+
+      kv("AT RISK",`$${t.risk_actual.toFixed(2)} + $${t.total_cost.toFixed(2)} costs (${t.risk_pct.toFixed(2)}%) · net R:R ${t.net_rr.toFixed(2)}${t.liquidation?` · liq ${t.liquidation}`:""}`),
+      d.token,"/api/stage/confirm",()=>{loadPos()});
+  }catch(e){$("#an-stage-msg").innerHTML=`<span class="note-bad">✗ ${esc(e.message)}</span>`}
+}
+
+/* proposals in Positions */
+async function checkBook(){
+  $("#pos-out").innerHTML=`<div class="spin">checking the book on fresh data…</div>`;
+  try{
+    const d=await j("/api/manage/proposals");
+    if(!d.proposals.length){$("#pos-out").innerHTML=`<div class="spin">book is empty</div>`;return}
+    const act={cancel:["CANCEL STALE","am"],open:["PAPER-FILL → OPEN","em"],outcome:["RECORD COMPLETED OUTCOME","rd"],close:["CLOSE BY PLAN","em"],scale:["TP1 SCALE-OUT","em"],trail:["TRAIL STOP","em"]};
+    $("#pos-out").innerHTML=d.proposals.map(r=>{
+      const a=act[r.kind];
+      return `<div class="veh" style="margin:0 0 8px"><div class="l1"><b>${esc(r.symbol)}</b><span class="${r.side}">${esc(r.side).toUpperCase()}</span><span>${esc(r.setup)}</span><span class="seal ${r.status==='open'?'em':'am'}">${esc(r.status).toUpperCase()}</span>${r.unrealized_r!==undefined?`<span style="color:${r.unrealized_r>=0?'var(--em)':'var(--rd)'}">${fmtR(r.unrealized_r)}</span>`:""}<span style="color:var(--t3)">last ${r.last??"—"}</span></div>
+      <div class="why">entry ${r.entry} · stop ${r.stop} · ${esc(r.detail||"")}</div>
+      ${a&&r.token?`<div style="margin-top:6px"><button class="btn ${a[1]}" onclick='proposeApply(${JSON.stringify(r.token)},${JSON.stringify(a[0])},${JSON.stringify(r.symbol)},${JSON.stringify(r.detail||"")})'>${a[0]} …</button></div>`:""}</div>`;
+    }).join("");
+  }catch(e){$("#pos-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+function proposeApply(token,label,sym,detail){
+  openConfirm(label+" — DRY RUN",kv("SYMBOL",esc(sym))+kv("PROPOSAL",esc(detail)),token,"/api/manage/confirm",()=>checkBook());
 }
 
 loadStatus();loadBoard();setInterval(loadStatus,60000);

@@ -4,8 +4,9 @@ A thin FastAPI layer over the SAME engine the CLI uses (zero statistical logic h
 every number the UI shows comes from the identical gated functions). Design contract:
 
   - LOCALHOST ONLY (hard-coded 127.0.0.1): API keys and data never leave this machine.
-  - READ-ONLY: Phase A exposes no order/stage/manage endpoint at all. The typed-CONFIRM
-    dry-run flow stays in the CLI until Phase B; live stays CLI-only (Phase D policy).
+  - DRY-RUN ONLY: Phase B adds stage/manage — two-step (fresh-preview ticket → typed
+    CONFIRM, enforced SERVER-side) and strictly paper (mode="dry-run"). There is NO live
+    route and no import of the live module; live stays CLI-only (Phase D policy).
   - The slow board scan runs in a BACKGROUND thread; the UI polls its state. Everything
     else (analyze/backtest) is synchronous with a spinner client-side.
 
@@ -23,12 +24,18 @@ from pathlib import Path
 from fastapi import FastAPI, HTTPException
 from fastapi.responses import FileResponse, JSONResponse
 
+import secrets
+from datetime import datetime, timezone
+
 from . import analysis as an
 from . import backtest as bt
+from . import data_fetch as dfetch
 from . import edge_score as es
 from . import journal as jn
-from . import risk as rk
+from . import monitor as mon
+from . import order as od
 from .config import DATA_DIR, Market, PROFILE_LABELS, Settings, apply_profile, apply_tier, load_settings, strictness_fluke_note
+from .guards import check_trade
 
 app = FastAPI(title="SENIORTRADE cockpit", docs_url=None, redoc_url=None)
 
@@ -107,7 +114,7 @@ def status():
         "watch": watch,
         "cache": {"ts": cache.get("timestamp"), "coins": len(cache.get("coins") or []),
                   "tf": cache.get("tf")},
-        "mode": "DRY-RUN (read-only UI — orders only via CLI)",
+        "mode": "DRY-RUN (web stage/manage = paper + typed CONFIRM · LIVE only via CLI)",
     }
 
 
@@ -228,6 +235,227 @@ def journal_view():
         "stats": {"n": len(rs), "win_rate": (len(wins) / len(rs)) if rs else 0.0,
                   "avg_r": (sum(rs) / len(rs)) if rs else 0.0, "total_r": sum(rs)},
     }
+
+
+# ---------------------------------------------------------------------------- #
+# PHASE B — dry-run interactions. Two-step, typed-CONFIRM, server-enforced:
+#   1. /preview runs the SAME checklist as the CLI (guards → edge gate → drift)
+#      on FRESH data and returns a short-lived one-time TICKET.
+#   2. /confirm requires that ticket + the EXACT typed phrase — then applies the
+#      IDENTICAL journal mutation the CLI would. Nothing touches an exchange:
+#      records are mode="dry-run"; there is still no live route in this app.
+# ---------------------------------------------------------------------------- #
+CONFIRM_PHRASE = "CONFIRM"
+_TICKETS: dict = {}
+_TICKET_TTL = 120.0          # a ticket is a FRESH read; stale → re-preview (re-fetch rail)
+
+
+def _mint(payload: dict) -> str:
+    now = time.time()
+    for k in [k for k, v in _TICKETS.items() if now - v["ts"] > _TICKET_TTL]:
+        _TICKETS.pop(k, None)
+    tok = secrets.token_hex(8)
+    _TICKETS[tok] = {"ts": now, **payload}
+    return tok
+
+
+def _redeem(token: str) -> dict | None:
+    t = _TICKETS.pop(token or "", None)
+    if not t or time.time() - t["ts"] > _TICKET_TTL:
+        return None
+    return t
+
+
+def _require_phrase(body: dict) -> None:
+    if (body or {}).get("phrase") != CONFIRM_PHRASE:
+        raise HTTPException(status_code=403,
+                            detail=f"type the exact phrase {CONFIRM_PHRASE!r} to proceed")
+
+
+@app.post("/api/stage/preview")
+def stage_preview(body: dict):
+    symbol = (body or {}).get("symbol", "").strip()
+    if not symbol:
+        raise HTTPException(status_code=422, detail="symbol required")
+    s = _settings()
+    mkt = _market((body or {}).get("market"))
+    records = jn.load_records()
+    state = jn.portfolio_state(records, s.journal)
+    try:
+        r = an.analyze(mkt, symbol, s, tf_trigger=s.analysis.tf_trigger,
+                       drawdown_pct=state.drawdown_pct)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(status_code=502, detail=f"{type(exc).__name__}: {exc}")
+    if not r.setups or r.plan is None:
+        raise HTTPException(status_code=409, detail="Nothing to stage — no live setup right now → NO TRADE.")
+    signal, plan = r.setups[0], r.plan
+    if not getattr(plan, "valid", True):
+        raise HTTPException(status_code=409, detail="Plan not worth taking: " + "; ".join(plan.notes))
+    if od.has_open_or_staged(records, symbol):
+        raise HTTPException(status_code=409, detail=f"Already OPEN/STAGED on {symbol} — refusing a duplicate.")
+    proposed = od.build_proposed(plan, signal, group="indep", risk_pct=r.risk_pct)
+    guard = check_trade(state, proposed, s.guards)
+    if not guard.allowed:
+        raise HTTPException(status_code=409, detail="GUARD BLOCK: " + "; ".join(guard.hard_blocks))
+    regime = r.structure.state.trend if (r.structure and r.structure.state) else ""
+    verdict = es.lookup_pooled_verdict(mkt, s.analysis.tf_trigger, signal.setup, regime,
+                                       symbol=symbol,
+                                       context=es.resolve_context(r.context, signal.direction))
+    level, msg = es.edge_gate(verdict, s.edge)
+    if level == es.EDGE_NEGATIVE:
+        raise HTTPException(status_code=409, detail=f"EDGE BLOCK: {msg}")
+    drift_ok, dmsg = od.check_drift(signal.entry_type, plan.entry, r.last_price, s.order.drift_pct)
+    val_ok, vmsg = od.check_validity(signal, r.last_price)
+    if not (drift_ok and val_ok):
+        raise HTTPException(status_code=409, detail="STALE READ: " +
+                            "; ".join(m for ok, m in ((drift_ok, dmsg), (val_ok, vmsg)) if not ok))
+    stage_kwargs = dict(
+        market=mkt, symbol=symbol, side=signal.direction, setup=signal.setup, grade=signal.grade,
+        group="indep", entry=plan.entry, stop=plan.stop, targets=list(plan.targets),
+        risk_pct=r.risk_pct, risk_amount=plan.risk_actual, regime=regime, bias=r.bias,
+        tide=r.posture, tf=s.analysis.tf_trigger, entry_type=signal.entry_type,
+        invalidation=getattr(r, "invalidation", 0.0) or 0.0,
+        leverage=getattr(plan, "leverage", 1.0) or 1.0,
+        liquidation_price=getattr(plan, "liquidation_price", None),
+        mode="dry-run", profile=s.profile)
+    token = _mint({"kind": "stage", "kwargs": stage_kwargs})
+    return {"token": token, "ttl": _TICKET_TTL, "ticket": {
+        "symbol": symbol, "setup": signal.setup, "side": signal.direction, "grade": signal.grade,
+        "guards": "PASS", "edge": {"level": level, "msg": msg},
+        "refetch": f"fresh · {dmsg}; {vmsg}",
+        "entry": plan.entry, "stop": plan.stop, "targets": list(plan.targets),
+        "entry_type": signal.entry_type, "risk_pct": r.risk_pct,
+        "risk_actual": plan.risk_actual, "total_cost": plan.total_cost,
+        "notional": plan.notional, "net_rr": plan.net_rr,
+        "leverage": getattr(plan, "leverage", None),
+        "liquidation": getattr(plan, "liquidation_price", None),
+        "profile": s.profile,
+    }}
+
+
+@app.post("/api/stage/confirm")
+def stage_confirm(body: dict):
+    _require_phrase(body)
+    t = _redeem((body or {}).get("token", ""))
+    if not t or t.get("kind") != "stage":
+        raise HTTPException(status_code=410, detail="ticket unknown or expired — preview again (fresh read required)")
+    tid = jn.record_staged(**t["kwargs"])
+    return {"staged": True, "id": tid, "mode": "dry-run",
+            "note": "recorded to the journal — NO order sent to any exchange"}
+
+
+def _bars_for(rec, s, exchanges: dict):
+    mkt = Market(rec.market) if not isinstance(rec.market, Market) else rec.market
+    ex = exchanges.get(mkt.value)
+    if ex is None:
+        ex = dfetch.make_exchange(mkt, s.api_key, s.api_secret)
+        dfetch.load_markets(ex)
+        exchanges[mkt.value] = ex
+    tf = rec.tf or s.analysis.tf_trigger
+    bars = dfetch.drop_unclosed(ex, dfetch.fetch_ohlcv(ex, rec.symbol, tf, s.analysis.candle_limit), tf)
+    return bars, float(bars["close"].iloc[-1])
+
+
+@app.get("/api/manage/proposals")
+def manage_proposals():
+    s = _settings()
+    out = []
+    exchanges: dict = {}
+    for rec in jn.load_records():
+        if rec.status not in ("staged", "open"):
+            continue
+        row = {"id": rec.id, "symbol": rec.symbol, "side": rec.side, "setup": rec.setup,
+               "status": rec.status, "entry": rec.entry_planned, "stop": rec.stop_planned,
+               "targets": list(rec.targets or []), "notes": list(rec.notes or []),
+               "kind": "hold", "detail": "", "token": None}
+        try:
+            bars, last = _bars_for(rec, s, exchanges)
+            row["last"] = last
+            if rec.status == "staged":
+                filled, entry_actual, why = mon.detect_paper_fill(
+                    rec, bars, last, expiry_bars=s.setups.expiry_bars)
+                if not filled and ("void" in why or "stale" in why or "expir" in why):
+                    row.update(kind="cancel", detail=why,
+                               token=_mint({"kind": "cancel", "rec_id": rec.id, "why": why}))
+                elif not filled:
+                    row.update(kind="pending", detail=why)
+                else:
+                    replay = mon.replay_after_fill(rec, bars, s.risk_mgmt)
+                    if replay and replay["closed"]:
+                        row.update(kind="outcome",
+                                   detail=(f"{why} — bars since the touch already CLOSED it at "
+                                           f"{replay['exit']:,.6g} ({replay['r']:+.2f}R). Record the "
+                                           f"COMPLETED outcome, never a naive open."),
+                                   token=_mint({"kind": "outcome", "rec_id": rec.id,
+                                                "entry_actual": entry_actual, "stop": rec.stop_planned,
+                                                "exit": replay["exit"], "r": replay["r"],
+                                                "fill_ts": replay["fill_ts"]}))
+                    else:
+                        mark = f" · marks {replay['r']:+.2f}R since fill" if replay else ""
+                        row.update(kind="open", detail=f"{why}{mark}",
+                                   token=_mint({"kind": "open", "rec_id": rec.id,
+                                                "entry_actual": entry_actual, "stop": rec.stop_planned,
+                                                "fill_ts": (replay or {}).get("fill_ts")}))
+            else:  # open — the SAME state machine as the backtest proposes the next step
+                action = mon.manage_step(rec, bars, last, s.risk_mgmt)
+                row["unrealized_r"] = mon.unrealized_r(rec, last)
+                if action.kind == mon.HOLD:
+                    row.update(kind="hold", detail=action.reason)
+                elif action.kind in (mon.STOP_EXIT, mon.CLOSE_TP2):
+                    row.update(kind="close", detail=action.reason,
+                               token=_mint({"kind": "close", "rec_id": rec.id,
+                                            "fill_price": action.fill_price,
+                                            "total_r": action.total_realized_r,
+                                            "risk_amount": rec.risk_amount,
+                                            "new_stop": action.new_stop}))
+                elif action.kind == mon.SCALE_TP1:
+                    row.update(kind="scale", detail=action.reason,
+                               token=_mint({"kind": "scale", "rec_id": rec.id,
+                                            "new_stop": action.new_stop,
+                                            "remaining": action.remaining_after,
+                                            "delta_r": action.realized_delta_r,
+                                            "locked": (rec.locked_r or 0.0) + (action.realized_delta_r or 0.0)}))
+                elif action.kind == mon.TRAIL:
+                    row.update(kind="trail", detail=action.reason,
+                               token=_mint({"kind": "trail", "rec_id": rec.id,
+                                            "new_stop": action.new_stop}))
+        except Exception as exc:  # noqa: BLE001 — one bad symbol must not sink the book
+            row.update(kind="error", detail=f"{type(exc).__name__}: {exc}")
+        out.append(row)
+    return {"proposals": out, "phrase": CONFIRM_PHRASE, "ttl": _TICKET_TTL}
+
+
+@app.post("/api/manage/confirm")
+def manage_confirm(body: dict):
+    _require_phrase(body)
+    t = _redeem((body or {}).get("token", ""))
+    if not t:
+        raise HTTPException(status_code=410, detail="ticket unknown or expired — re-check the book")
+    now = datetime.now(timezone.utc).isoformat()
+    k = t["kind"]
+    if k == "cancel":
+        jn.record_cancel(t["rec_id"], reason=t["why"])
+    elif k == "open":
+        jn.record_open(t["rec_id"], entry_actual=t["entry_actual"], current_stop=t["stop"],
+                       mode="dry-run", managed_at=t.get("fill_ts"))
+    elif k == "outcome":
+        jn.record_open(t["rec_id"], entry_actual=t["entry_actual"], current_stop=t["stop"],
+                       managed_at=t["fill_ts"], mode="dry-run")
+        jn.record_close(t["rec_id"], exit_price=t["exit"], realized_r=t["r"])
+    elif k == "close":
+        pnl = (t["total_r"] or 0.0) * (t["risk_amount"] or 0.0)
+        jn.record_close(t["rec_id"], exit_price=t["fill_price"], realized_r=t["total_r"],
+                        pnl_usd=pnl, stop_actual=t["new_stop"])
+    elif k == "scale":
+        jn.record_manage(t["rec_id"], current_stop=t["new_stop"], remaining_fraction=t["remaining"],
+                         tp1_filled=True, locked_r=t["locked"], managed_at=now,
+                         note=f"TP1 scale-out +{(t['delta_r'] or 0):.2f}R; stop→breakeven")
+    elif k == "trail":
+        jn.record_manage(t["rec_id"], current_stop=t["new_stop"], managed_at=now,
+                         note=f"trailed stop → {t['new_stop']:,.6g}")
+    else:
+        raise HTTPException(status_code=400, detail=f"unknown action {k!r}")
+    return {"applied": k, "id": t.get("rec_id"), "mode": "dry-run"}
 
 
 def main() -> None:

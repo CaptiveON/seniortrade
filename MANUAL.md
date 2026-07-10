@@ -355,7 +355,9 @@ python3 -m src.cli ui          # → http://127.0.0.1:8484
 ```
 The SENIORTRADE cockpit in your browser — **the same engine, a second frontend** (the CLI keeps working). Views: **Board** (two-lane ALPHA/BETA with the drift banner, near-misses, watchlist, rescan/rebuild buttons), **Analyze** (lenses, setups, plan, edge verdict + robustness, archetype conditional, why for/against, sizing evidence), **Research** (verdict table + data quality), **Lab** (P13 importance), **Positions** (the book, read-only), **Journal** (realized stats). The topbar shows tier · risk profile · strictness warnings · watch status · cache age · equity.
 
-**Safety contract:** binds to **127.0.0.1 only** (keys/data never leave the machine); **strictly read-only** — no stage/manage/roar/live route exists in the app (structurally tested); orders happen only via the CLI's typed CONFIRM. The slow board scan runs server-side in the background — the page polls.
+**Phase B — dry-run interactions in the browser:** `analyze` gains a **▶ STAGE (DRY-RUN)** button and Positions gains **⟳ CHECK BOOK**. Both use the same two-step rail: the server runs the **full CLI checklist on fresh data** (guards → duplicate check → edge gate → drift/validity re-fetch) and mints a **one-time ticket (120s TTL)**; the modal then requires **typing `CONFIRM`** — checked **server-side**, wrong phrase → 403, expired/replayed ticket → 410. Book proposals reuse the exact CLI logic: stale-pending auto-cancel, paper-fill, **replay-after-fill** (a breached stop proposes the *completed outcome*, never a naive open), TP1 scale-out / trail / close by plan.
+
+**Safety contract:** binds to **127.0.0.1 only** (keys/data never leave the machine); **everything is paper** — every record is `mode="dry-run"`; there is **no live route and the live module is never imported** (both structurally tested); real money remains exclusively behind the CLI's `--live` arm flag + `CONFIRM LIVE`. The slow board scan runs server-side in the background — the page polls.
 
 ## Risk profiles & the strictness axis (the cockpit)
 

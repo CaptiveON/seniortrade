@@ -25,7 +25,7 @@ def test_status_shape_and_safety_banner():
     d = r.json()
     for k in ("profile", "tier", "equity", "sig_z", "watch", "cache", "mode", "stages"):
         assert k in d
-    assert "READ-ONLY" in d["mode"].upper() or "read-only" in d["mode"]
+    assert "DRY-RUN" in d["mode"] and "LIVE only via CLI" in d["mode"]
 
 
 def test_board_refresh_runs_scan_in_background(monkeypatch):
@@ -63,11 +63,75 @@ def test_board_refresh_refuses_concurrent_scans(monkeypatch):
             api._STATE["scanning"] = False
 
 
-def test_no_order_endpoints_exist_in_phase_a():
-    # READ-ONLY contract: no stage/order/live route is registered at all
+def test_phase_b_contract_no_live_surface():
+    # Phase B: stage/manage exist as DRY-RUN + typed-CONFIRM. LIVE must have NO surface:
     paths = {r.path for r in api.app.routes}
-    for forbidden in ("stage", "order", "live", "manage", "roar"):
-        assert not any(forbidden in p for p in paths), paths
+    assert not any("live" in p or "roar" in p for p in paths), paths
+    import inspect
+    src = inspect.getsource(api)
+    assert "from . import live" not in src and "import live" not in src   # never even imported
+
+
+def test_stage_confirm_requires_exact_phrase_and_fresh_ticket():
+    c = _client()
+    # wrong phrase → 403 (server-enforced, the UI cannot bypass)
+    r = c.post("/api/stage/confirm", json={"token": "whatever", "phrase": "confirm"})
+    assert r.status_code == 403
+    # right phrase but unknown/expired ticket → 410 (fresh preview required)
+    r = c.post("/api/stage/confirm", json={"token": "deadbeef", "phrase": "CONFIRM"})
+    assert r.status_code == 410
+
+
+def test_stage_preview_and_confirm_happy_path(monkeypatch):
+    plan = SimpleNamespace(valid=True, notes=[], entry=1.0, stop=1.1, targets=[0.9, 0.8],
+                           risk_actual=10.0, total_cost=0.5, notional=400.0, net_rr=2.5,
+                           risk_budget=10.0, size=100.0, gross_rr=2.7, leverage=3.0,
+                           liquidation_price=1.4, symbol="X/USDT:USDT", side="short")
+    sig = SimpleNamespace(setup="range_fade", direction="short", grade="A",
+                          entry_type="limit", entry=1.0, stop=1.1, targets=[0.9, 0.8])
+    res = SimpleNamespace(setups=[sig], plan=plan, last_price=1.0, bias="neutral",
+                          posture="risk-off", freshness="fresh", context={"arch": "range"},
+                          risk_pct=1.0, structure=SimpleNamespace(state=SimpleNamespace(trend="range")),
+                          invalidation=1.2)
+    monkeypatch.setattr(api.an, "analyze", lambda *a, **k: res)
+    monkeypatch.setattr(api.jn, "load_records", lambda path=None: [])
+    monkeypatch.setattr(api.od, "has_open_or_staged", lambda recs, sym: False)
+    monkeypatch.setattr(api.es, "lookup_pooled_verdict", lambda *a, **k: None)  # hermetic: no cache
+    staged = {}
+    monkeypatch.setattr(api.jn, "record_staged", lambda **kw: staged.update(kw) or "tid123")
+    c = _client()
+    r = c.post("/api/stage/preview", json={"symbol": "X/USDT:USDT"})
+    assert r.status_code == 200, r.text
+    d = r.json()
+    assert d["ticket"]["guards"] == "PASS" and d["ticket"]["entry_type"] == "limit"
+    r2 = c.post("/api/stage/confirm", json={"token": d["token"], "phrase": "CONFIRM"})
+    assert r2.status_code == 200 and r2.json()["staged"] and r2.json()["mode"] == "dry-run"
+    assert staged["mode"] == "dry-run" and staged["symbol"] == "X/USDT:USDT"
+    # the ticket is ONE-TIME: replay refused
+    r3 = c.post("/api/stage/confirm", json={"token": d["token"], "phrase": "CONFIRM"})
+    assert r3.status_code == 410
+
+
+def test_manage_confirm_applies_the_same_journal_mutations(monkeypatch):
+    calls = []
+    monkeypatch.setattr(api.jn, "record_open",
+                        lambda rid, **kw: calls.append(("open", rid, kw)))
+    monkeypatch.setattr(api.jn, "record_close",
+                        lambda rid, **kw: calls.append(("close", rid, kw)))
+    tok = api._mint({"kind": "outcome", "rec_id": "r1", "entry_actual": 1.0, "stop": 1.1,
+                     "exit": 1.1, "r": -1.0, "fill_ts": "t"})
+    c = _client()
+    r = c.post("/api/manage/confirm", json={"token": tok, "phrase": "CONFIRM"})
+    assert r.status_code == 200 and r.json()["applied"] == "outcome"
+    kinds = [k for k, *_ in calls]
+    assert kinds == ["open", "close"]                 # finding #6 semantics: fill THEN close, never naive open
+    assert calls[0][2]["mode"] == "dry-run"
+
+
+def test_manage_confirm_phrase_gate():
+    tok = api._mint({"kind": "cancel", "rec_id": "r2", "why": "stale"})
+    r = _client().post("/api/manage/confirm", json={"token": tok, "phrase": "yes"})
+    assert r.status_code == 403
 
 
 def test_positions_and_journal_read_endpoints():
