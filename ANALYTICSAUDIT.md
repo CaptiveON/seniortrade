@@ -86,9 +86,9 @@
 
 | # | Item | Cost | History | Horizon fit | Why this rank |
 |---|------|------|---------|-------------|---------------|
-| **A1** | **Funding-rate history → gated features** (+ real funding in backtest costs) | free | **full** | ★★★ | Best-evidenced effect at our horizon; measurable through the gates *today* |
+| **A1** | ✅ **DONE 2026-07-10** — `src/derivs.py`: full funding history (paginated, cached, backfilled to the bar window), PIT-aligned 30d z-buckets (`ext−/hi−/mid/hi+/ext+`) as context feature `fund` through the standard gates, and **actual per-trade funding replaces the flat cost assumption** (fallback kept) | free | full | ★★★ | live: BTC 1,030 events, current bucket hi+ |
 | **A2** | **True CVD + spot-vs-perp divergence** (klines taker-buy field) | free | full | ★★★ | Upgrades an existing proxy; genuine aggression read; immediate backtestability |
-| **A3** | **OI-history features** (expansion/flush, OI-price divergence) + **start the 30-day-retention collector NOW** (OI + all L/S ratios) | free | 30d → self-collected | ★★★ | Mechanically linked to cascades; urgency = data loss is irreversible |
+| **A3** | ✅ **DONE 2026-07-10** — collector persists OI + top-pos/top-acct/global L/S + taker ratio for the 12-coin pool on **every scan** (append-dedupe, `data/derivs/`); OI 24h-change feature `oi` (expand/flat/contract) wired PIT-honest (bars older than the local store carry None). First run banked 2,160 rows/metric | free | 30d → growing | ★★★ | the retention clock is now covered |
 | **B1** | **Long/Short ratios → features** (after ~90d self-collected history; display-only meanwhile) | free | self-collected | ★★ | Positioning extreme complement to funding |
 | **B2** | **MVRV-Z + hash-ribbon → tide/posture layer** (expanding-window, PIT, labeled macro-context; feeds Phase-3 risk profiles) | free | full (daily) | ★ (posture) | Real cycle information, honestly unprovable → posture only |
 | **C1** | **Exchange netflow → context feature** | **paid** | vendor | ★★ (weekly) | Only with a CryptoQuant/Glassnode subscription |

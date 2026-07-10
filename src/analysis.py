@@ -326,6 +326,17 @@ def analyze(
         context = _bt._bar_context(trig, struct, settings, htf_struct.state.trend if htf_struct.state else None)
     except Exception:
         context = {}
+    if market is Market.USDM:
+        try:                                          # A1/A3 live buckets (PIT: trailing data only)
+            from . import derivs as dv
+            ts_ms = [int(t.timestamp() * 1000) for t in trig.index]
+            f_ctx, _ = dv.align_funding(ts_ms, dv.funding_series(ex, market, symbol))
+            o_ctx = dv.align_oi(ts_ms, dv.oi_series(market, symbol, tf_trigger), tf_trigger)
+            context["fund"] = f_ctx[-1] if f_ctx else None
+            context["oi"] = o_ctx[-1] if o_ctx else None
+        except Exception:
+            context.setdefault("fund", None)
+            context.setdefault("oi", None)
 
     # indicators on the trigger TF
     rsi_s = ind.rsi(trig, cfg.rsi_length)

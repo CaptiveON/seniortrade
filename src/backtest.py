@@ -123,8 +123,11 @@ def _archetype(trend: str, vol: str, thrust: float, leg: float, scfg) -> str:
     return "range"                                        # neutral range, normal vol, no clear leg
 
 
-def _bar_context(window: pd.DataFrame, struct, settings, htf_trend: str | None) -> dict:
-    """Bar-level context (direction-independent). htf_align is added per-signal."""
+def _bar_context(window: pd.DataFrame, struct, settings, htf_trend: str | None,
+                 fund: str | None = None, oi: str | None = None) -> dict:
+    """Bar-level context (direction-independent). htf_align is added per-signal.
+    fund/oi (A1/A3): PIT-aligned derivative buckets — None when unavailable (bars
+    older than the local OI store, thin funding history); the gates skip None."""
     scfg = settings.setups
     feats: dict = {}
     try:
@@ -163,6 +166,8 @@ def _bar_context(window: pd.DataFrame, struct, settings, htf_trend: str | None) 
             leg = (c - float(closes.iloc[-1 - scfg.arch_leg_bars])) / atr
     trend = struct.state.trend if struct.state else st.RANGE
     feats["arch"] = _archetype(trend, feats["vol"], thrust, leg, scfg)
+    feats["fund"] = fund
+    feats["oi"] = oi
     return feats
 
 
@@ -228,7 +233,7 @@ def _resolve_entry(bars: pd.DataFrame, signal_i: int, sig, expiry: int):
 
 
 def _cost_breakdown(sig, entry: float, market: Market, settings, bars_held: int,
-                    tf_hours: float) -> tuple[float, float]:
+                    tf_hours: float, actual_rate_per_8h: float | None = None) -> tuple[float, float]:
     """(exec_r, funding_r): the execution cost (fees + slippage, both sides) and the funding/carry
     cost, each in R. Split out so the report can SEPARATE edge from execution (P10)."""
     per_unit = abs(entry - sig.stop)
@@ -245,7 +250,12 @@ def _cost_breakdown(sig, entry: float, market: Market, settings, bars_held: int,
     funding_r = 0.0
     if market is Market.USDM:
         hours = bars_held * tf_hours
-        funding_frac = settings.backtest.assumed_funding_per_8h * (hours / 8.0)
+        # A1: the ACTUAL settled funding over the hold when history is available;
+        # the flat assumption is only the fallback (cost-model honesty).
+        if actual_rate_per_8h is not None:
+            funding_frac = abs(actual_rate_per_8h) * (hours / 8.0)
+        else:
+            funding_frac = settings.backtest.assumed_funding_per_8h * (hours / 8.0)
         funding_r = (entry / per_unit) * funding_frac           # carry as a cost (conservative)
     return exec_r, funding_r
 
@@ -291,7 +301,9 @@ def _spawn_nulls(bars: pd.DataFrame, sig, regime: str, market: Market, settings,
 
 
 def run_setups(bars: pd.DataFrame, market: Market, settings, tf: str, *,
-               null_k: int | None = None, seed: int = 0, htf_trend: list | None = None) -> BacktestResult:
+               null_k: int | None = None, seed: int = 0, htf_trend: list | None = None,
+               fund_ctx: list | None = None, fund_rate: list | None = None,
+               oi_ctx: list | None = None) -> BacktestResult:
     """Backtest all setups on one coin -> real Trades (each tagged with point-in-time CONTEXT)
     AND the matched-geometry null shadows (unless ``null_k`` is 0). The shared detection walk
     feeds both. ``htf_trend`` (per-bar bias-TF trend) populates the real HTF context + ctx gate."""
@@ -311,7 +323,9 @@ def run_setups(bars: pd.DataFrame, market: Market, settings, tf: str, *,
         if struct.state is None:
             continue
         htf_i = htf_trend[i] if (htf_trend is not None and i < len(htf_trend)) else None
-        bar_ctx = _bar_context(window, struct, settings, htf_i)
+        f_i = fund_ctx[i] if (fund_ctx is not None and i < len(fund_ctx)) else None
+        o_i = oi_ctx[i] if (oi_ctx is not None and i < len(oi_ctx)) else None
+        bar_ctx = _bar_context(window, struct, settings, htf_i, fund=f_i, oi=o_i)
         ctx = su.SetupContext(htf_trend=(htf_i if htf_i not in (None, "na") else struct.state.trend),
                               tide="neutral")
         regime = struct.state.trend
@@ -342,7 +356,12 @@ def run_setups(bars: pd.DataFrame, market: Market, settings, tf: str, *,
                 after.iloc[0, after.columns.get_loc(fav)] = entry_price
             r, held, exit_price = rk.simulate_detailed(
                 sig.direction, entry_price, sig.stop, sig.targets, after, settings.risk_mgmt)
-            exec_r, funding_r = _cost_breakdown(sig, entry_price, market, settings, held, tf_hours)
+            actual_rate = None
+            if fund_rate is not None:
+                win = [r for r in fund_rate[entry_idx:entry_idx + max(held, 1)] if r is not None]
+                actual_rate = (sum(abs(x) for x in win) / len(win)) if win else None
+            exec_r, funding_r = _cost_breakdown(sig, entry_price, market, settings, held, tf_hours,
+                                                actual_rate_per_8h=actual_rate)
             r_net = r - exec_r - funding_r
             exit_idx = entry_idx + max(held - 1, 0)
             tctx = dict(bar_ctx)

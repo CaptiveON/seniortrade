@@ -187,9 +187,20 @@ def build_pooled_profiles(market: Market, settings, tf: str, symbols: list,
     pooled: dict = {}
     pooled_null: dict = {}
     per_symbol_trades: dict = {}
+    from . import derivs as dv
     for seed, (sym, bars) in enumerate(bars_by.items()):
         htf = bt.htf_trend_aligned(market, sym, settings, bars.index, exch=htf_ex) if htf_ex else None
-        res = bt.run_setups(bars, market, settings, tf, seed=seed, htf_trend=htf)
+        fund_ctx = fund_rate = oi_ctx = None
+        if market is Market.USDM and htf_ex is not None:
+            try:                                     # A1 funding (full history) + A3 OI (local store)
+                ts_ms = [int(t.timestamp() * 1000) for t in bars.index]
+                since = ts_ms[0] - 100 * 8 * 3600 * 1000   # bucket warmup window before bar 1
+                fund_ctx, fund_rate = dv.align_funding(ts_ms, dv.funding_series(htf_ex, market, sym, since_ms=since))
+                oi_ctx = dv.align_oi(ts_ms, dv.oi_series(market, sym, tf), tf)
+            except Exception:                        # degrade to None features, never invent
+                fund_ctx = fund_rate = oi_ctx = None
+        res = bt.run_setups(bars, market, settings, tf, seed=seed, htf_trend=htf,
+                            fund_ctx=fund_ctx, fund_rate=fund_rate, oi_ctx=oi_ctx)
         per_symbol_trades[sym] = res.trades
         for name, trades in res.trades.items():
             pooled.setdefault(name, []).extend(trades)
@@ -324,7 +335,7 @@ def resolve_context(bar_context: dict | None, direction: str) -> dict | None:
     if not bar_context:
         return None
     from . import backtest as _bt
-    out = {f: bar_context.get(f) for f in ("vol", "mom", "loc", "div", "arch")}
+    out = {f: bar_context.get(f) for f in ("vol", "mom", "loc", "div", "arch", "fund", "oi")}
     out["htf_align"] = _bt._htf_align(bar_context.get("htf"), direction)
     return out
 
@@ -656,7 +667,7 @@ def score_opportunity(
 # significance AFTER a Bonferroni penalty for the number of splits tried. This is
 # the honest "does context add edge?" measurement — run before any wiring.
 # --------------------------------------------------------------------------- #
-CONTEXT_FEATURES = ("vol", "mom", "loc", "div", "htf_align", "arch")
+CONTEXT_FEATURES = ("vol", "mom", "loc", "div", "htf_align", "arch", "fund", "oi")
 
 
 def _cell_label(conditions) -> str:
@@ -1029,4 +1040,12 @@ def scan(market: Market, settings, top: int | None = None, refresh: bool = False
         cands = sorted(beta_cands, key=lambda d: -d["lower"])[:3] if drift["proven"] else []
         beta = {"posture": posture, "tide_regime": tide_regime, "drift": drift,
                 "candidates": cands, "near_misses": near_misses(profiles, cfg)}
+    try:                                             # A3: persist the 30-day OI/L-S window —
+        from . import derivs as dv                   # every scan grows the local history
+        from . import data_fetch as _df
+        _ex = _df.make_exchange(market, settings.api_key, settings.api_secret)
+        _df.load_markets(_ex)
+        dv.collect_snapshots(_ex, market, pool_syms, period=tf)
+    except Exception:                                # collection must never break the board
+        pass
     return result.context, opportunities, watchlist, beta
