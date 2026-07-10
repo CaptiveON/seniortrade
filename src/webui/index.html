@@ -102,6 +102,7 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
     <button data-v="lab"><span class="ic">⚗</span>Lab</button>
     <button data-v="positions"><span class="ic">❖</span>Positions</button>
     <button data-v="journal"><span class="ic">✦</span>Journal</button>
+    <button data-v="cockpit"><span class="ic">⚙</span>Risk Cockpit</button>
     <div class="grow"></div>
     <div class="dry"><b>DRY-RUN · READ-ONLY</b>orders exist only via the CLI's typed CONFIRM</div>
   </nav>
@@ -156,6 +157,10 @@ input[type=text]{background:var(--bg);border:1px solid var(--ln);border-radius:8
       <div class="panel"><div class="ph"><h2>✦ JOURNAL</h2><span class="sub">realized performance · promise vs delivery</span></div>
         <div id="jr-out"><div class="spin">loading…</div></div></div>
     </section>
+    <section id="v-cockpit" class="hide">
+      <div class="panel"><div class="ph"><h2>⚙ RISK COCKPIT</h2><span class="sub">your command authority — appetite &amp; selectivity move; TRUTH and RAILS never do</span></div>
+        <div id="ck-out" class="pad"><div class="spin">loading…</div></div></div>
+    </section>
   </main>
 </div>
 <div id="modal" class="overlay hide"><div class="modal">
@@ -178,7 +183,7 @@ document.querySelectorAll("nav button").forEach(b=>b.onclick=()=>{
   document.querySelectorAll("nav button").forEach(x=>x.classList.remove("on"));b.classList.add("on");
   document.querySelectorAll("main section").forEach(s=>s.classList.add("hide"));
   $("#v-"+b.dataset.v).classList.remove("hide");
-  if(b.dataset.v==="lab")loadLab();if(b.dataset.v==="positions")loadPos();if(b.dataset.v==="journal")loadJournal();
+  if(b.dataset.v==="lab")loadLab();if(b.dataset.v==="positions")loadPos();if(b.dataset.v==="journal")loadJournal();if(b.dataset.v==="cockpit")loadCockpit();
 });
 
 /* topbar */
@@ -388,6 +393,42 @@ async function checkBook(){
 }
 function proposeApply(token,label,sym,detail){
   openConfirm(label+" — DRY RUN",kv("SYMBOL",esc(sym))+kv("PROPOSAL",esc(detail)),token,"/api/manage/confirm",()=>checkBook());
+}
+
+/* -------- Phase C: Risk Cockpit -------- */
+const fmtV=v=>typeof v==="boolean"?(v?"ON":"OFF"):v;
+async function loadCockpit(){
+  try{
+    const d=await j("/api/cockpit");
+    let h=`<div style="display:flex;gap:10px;margin-bottom:12px">`;
+    for(const [name,p] of Object.entries(d.profiles)){
+      const act=d.active===name;
+      const col=name==="L0"?"var(--em)":name==="L1"?"var(--t2)":name==="L2"?"var(--am)":"var(--rd)";
+      h+=`<div onclick="previewProfile('${name}')" style="flex:1;cursor:pointer;background:${act?'transparent':'var(--s2)'};border:1.5px solid ${act?col:'var(--ln)'};border-radius:10px;padding:12px 14px${act?';background:color-mix(in srgb,'+col+' 10%, transparent)':''}">
+        <div style="display:flex;gap:8px;align-items:center"><b style="font-family:var(--mono);font-size:15px;color:${col}">${name}</b><span style="font-family:var(--mono);font-size:10px;color:${act?'var(--tx)':'var(--t2)'}">${esc(p.label)}</span>${act?'<span class="seal em">ACTIVE</span>':''}</div>
+        <div style="color:var(--t3);font-size:8.5px;margin-top:5px">${p.knobs.slice(0,7).map(k=>esc(k.label)+" "+esc(String(fmtV(k.value)))).join(" · ")}</div></div>`;
+    }
+    h+=`</div>`;
+    if(!d.active)h+=`<div style="color:var(--t3);font-family:var(--mono);font-size:10px;margin-bottom:10px">no profile active — raw config (today's defaults + your env). Click a card to apply one.</div>`;
+    h+=`<div style="display:flex;gap:14px"><div style="flex:1" class="panel"><div class="ph"><h2 style="font-size:11px">STRICTNESS — the truth bar (read-only here, deliberately)</h2></div><div class="pad">`;
+    for(const pt of d.strictness.points){
+      const act=Math.abs(d.strictness.sig_z-pt.sig_z)<1e-9;
+      h+=`<div class="kv" style="${act?'color:var(--em)':''}"><b>sig_z ${pt.sig_z}</b><span>${esc(pt.fluke)} fluke · ${esc(pt.label)}${act?"  ← active":""}</span></div>`;
+    }
+    if(d.strictness.note)h+=`<div class="note-bad" style="margin-top:6px">⚠ ${esc(d.strictness.note)}</div>`;
+    h+=`<div style="color:var(--t3);font-size:9px;margin-top:8px">${esc(d.strictness.how)}</div></div></div>`;
+    h+=`<div style="width:430px" class="panel"><div class="ph"><h2 style="font-size:11px">🔒 HONESTY-LOCKED — no profile or button can touch these</h2></div><div class="pad" style="font-family:var(--mono);font-size:9.5px;color:var(--t2)">${d.honesty_locked.map(esc).join("<br>")}</div></div></div>`;
+    h+=`<div style="color:var(--t3);font-size:9px;margin-top:10px">${esc(d.scope_note)}</div>`;
+    $("#ck-out").innerHTML=h;
+  }catch(e){$("#ck-out").innerHTML=`<div class="err">${esc(e.message)}</div>`}
+}
+async function previewProfile(name){
+  try{
+    const d=await j("/api/cockpit/profile",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name})});
+    const rows=(d.diff.length?d.diff.map(x=>kv(x.label,`${esc(String(fmtV(x.old)))} → <b style="color:var(--am)">${esc(String(fmtV(x.new)))}</b>`)).join(""):kv("changes","none — already this posture"))+
+      kv("HONESTY",`<span style="color:var(--em)">gates untouched by construction · env still beats profile</span>`);
+    openConfirm(`APPLY PROFILE ${name||"— raw config"} · ${esc(d.to_label)}`,rows,d.token,"/api/cockpit/profile/confirm",()=>{loadStatus();loadCockpit()});
+  }catch(e){$("#ck-out").innerHTML+=`<div class="err">${esc(e.message)}</div>`}
 }
 
 loadStatus();loadBoard();setInterval(loadStatus,60000);

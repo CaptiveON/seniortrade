@@ -139,3 +139,37 @@ def test_positions_and_journal_read_endpoints():
     assert c.get("/api/positions").status_code == 200
     d = c.get("/api/journal").json()
     assert "stats" in d and "closed" in d
+
+
+# --- Phase C: the Risk Cockpit ------------------------------------------------ #
+def test_cockpit_readout_shape():
+    d = _client().get("/api/cockpit").json()
+    assert set(d["profiles"]) == {"L0", "L1", "L2", "L3"}
+    assert all(p["knobs"] for p in d["profiles"].values())
+    assert len(d["honesty_locked"]) >= 8                       # the locked gates are visible
+    assert any(pt["sig_z"] == 1.65 for pt in d["strictness"]["points"])
+    assert "NOT a button" in d["strictness"]["how"]            # strictness deliberately read-only
+
+
+def test_profile_switch_full_rail_and_scope():
+    import os
+    c = _client()
+    assert c.post("/api/cockpit/profile", json={"name": "L9"}).status_code == 422
+    d = c.post("/api/cockpit/profile", json={"name": "L2"}).json()
+    assert d["to"] == "L2" and d["diff"]                       # a real old→new diff
+    # phrase enforced on profile changes too
+    assert c.post("/api/cockpit/profile/confirm",
+                  json={"token": d["token"], "phrase": "ok"}).status_code == 403
+    try:
+        d2 = c.post("/api/cockpit/profile", json={"name": "L2"}).json()     # new ticket (one-time)
+        r = c.post("/api/cockpit/profile/confirm", json={"token": d2["token"], "phrase": "CONFIRM"})
+        assert r.status_code == 200
+        e = r.json()["echo"]
+        assert e["risk_pct"] == 3.0 and e["sig_z_unchanged"] == 1.65        # appetite moved, truth didn't
+        assert c.get("/api/status").json()["profile"] == "L2"               # visible everywhere
+        # clear back to raw config through the same rail
+        d3 = c.post("/api/cockpit/profile", json={"name": None}).json()
+        r2 = c.post("/api/cockpit/profile/confirm", json={"token": d3["token"], "phrase": "CONFIRM"})
+        assert r2.status_code == 200 and c.get("/api/status").json()["profile"] is None
+    finally:
+        os.environ.pop("RISK_PROFILE", None)

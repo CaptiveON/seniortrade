@@ -34,7 +34,8 @@ from . import edge_score as es
 from . import journal as jn
 from . import monitor as mon
 from . import order as od
-from .config import DATA_DIR, Market, PROFILE_LABELS, Settings, apply_profile, apply_tier, load_settings, strictness_fluke_note
+from .config import (DATA_DIR, Market, PROFILE_LABELS, RISK_PROFILES, Settings, _HONESTY_LOCKED,
+                     apply_profile, apply_tier, load_settings, strictness_fluke_note)
 from .guards import check_trade
 
 app = FastAPI(title="SENIORTRADE cockpit", docs_url=None, redoc_url=None)
@@ -456,6 +457,89 @@ def manage_confirm(body: dict):
     else:
         raise HTTPException(status_code=400, detail=f"unknown action {k!r}")
     return {"applied": k, "id": t.get("rec_id"), "mode": "dry-run"}
+
+
+# ---------------------------------------------------------------------------- #
+# PHASE C — the Risk Cockpit. Profile switching = the SAME ticket + typed-CONFIRM
+# rail (appetite changes deserve friction). Scope is the SERVER PROCESS: the
+# cockpit sets RISK_PROFILE for every subsequent API call and board scan; put it
+# in .env to persist across restarts. STRICTNESS is deliberately read-only here —
+# the truth bar gets no button (env EDGE_SIG_Z only, and it screams when moved).
+# ---------------------------------------------------------------------------- #
+_PROFILE_KNOBS = (
+    ("risk", "risk_pct", "risk %/trade"),
+    ("risk_mgmt", "max_risk_pct", "ceiling %"),
+    ("guards", "heat_cap_pct", "heat cap %"),
+    ("guards", "max_positions", "max positions"),
+    ("guards", "daily_loss_limit_r", "daily loss lock (R)"),
+    ("edge", "floor", "edge floor (R)"),
+    ("risk_mgmt", "min_net_rr", "min net R:R"),
+    ("risk_mgmt", "dd_scale_enabled", "dd-scale"),
+    ("risk_mgmt", "vol_target_enabled", "vol-target"),
+    ("risk_mgmt", "kelly_enabled", "Kelly"),
+)
+
+
+def _knob_rows(s) -> list:
+    return [{"label": lbl, "value": getattr(getattr(s, sec), f)} for sec, f, lbl in _PROFILE_KNOBS]
+
+
+@app.get("/api/cockpit")
+def cockpit():
+    s = _settings()
+    profiles = {}
+    for name in sorted(RISK_PROFILES):
+        applied = load_settings(base=apply_profile(Settings(), name))
+        profiles[name] = {"label": PROFILE_LABELS.get(name, ""), "knobs": _knob_rows(applied)}
+    return {
+        "active": s.profile, "active_label": PROFILE_LABELS.get(s.profile or "", ""),
+        "current": _knob_rows(s),
+        "profiles": profiles,
+        "strictness": {"sig_z": s.edge.sig_z, "note": strictness_fluke_note(s.edge.sig_z),
+                       "points": [{"sig_z": 1.65, "fluke": "~5%", "label": "default · 95% one-sided"},
+                                  {"sig_z": 1.28, "fluke": "~12%", "label": "more trades · smaller size mandatory"},
+                                  {"sig_z": 1.00, "fluke": "~16%", "label": "research only"}],
+                       "how": "set EDGE_SIG_Z in .env — deliberately NOT a button; the truth bar is turned knowingly or not at all"},
+        "honesty_locked": sorted(f"{sec}.{fld}" for sec, fld in _HONESTY_LOCKED),
+        "scope_note": "profile changes apply to THIS cockpit session (server process); set RISK_PROFILE in .env to persist",
+    }
+
+
+@app.post("/api/cockpit/profile")
+def profile_preview(body: dict):
+    name = ((body or {}).get("name") or "").strip().upper() or None
+    if name and name not in RISK_PROFILES:
+        raise HTTPException(status_code=422, detail=f"unknown profile {name!r} — choose from {sorted(RISK_PROFILES)} or null to clear")
+    cur = _settings()
+    new = load_settings(base=apply_profile(apply_tier(Settings(), None), name))
+    diff = []
+    for (sec, f, lbl), old_row, new_row in zip(_PROFILE_KNOBS, _knob_rows(cur), _knob_rows(new)):
+        if old_row["value"] != new_row["value"]:
+            diff.append({"label": lbl, "old": old_row["value"], "new": new_row["value"]})
+    token = _mint({"kind": "profile", "name": name})
+    return {"token": token, "ttl": _TICKET_TTL,
+            "from": cur.profile, "to": name, "to_label": PROFILE_LABELS.get(name or "", "raw config"),
+            "diff": diff,
+            "note": "explicit env vars still BEAT the profile · honesty gates untouched by construction"}
+
+
+@app.post("/api/cockpit/profile/confirm")
+def profile_confirm(body: dict):
+    _require_phrase(body)
+    t = _redeem((body or {}).get("token", ""))
+    if not t or t.get("kind") != "profile":
+        raise HTTPException(status_code=410, detail="ticket unknown or expired — preview again")
+    import os
+    if t["name"]:
+        os.environ["RISK_PROFILE"] = t["name"]
+    else:
+        os.environ.pop("RISK_PROFILE", None)
+    s = _settings()
+    return {"applied": t["name"] or "raw config", "profile": s.profile,
+            "echo": {"risk_pct": s.risk.risk_pct, "ceiling": s.risk_mgmt.max_risk_pct,
+                     "heat": s.guards.heat_cap_pct, "floor": s.edge.floor,
+                     "sig_z_unchanged": s.edge.sig_z},
+            "note": "applies to this cockpit session; staged trades are journaled with this profile"}
 
 
 def main() -> None:
